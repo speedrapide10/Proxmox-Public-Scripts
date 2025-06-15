@@ -4,14 +4,14 @@
 # Proxmox VE VM Management Script
 #
 # Author: speedrapide10
-# Version: 14.3 (Final & Stable)
+# Version: 15.4 (Final & Stable)
 # Tested on: Proxmox VE 8.4.1
 #
 # This script provides a robust, safe, and reliable method for automating
 # common VM management tasks on a Proxmox VE host.
 #
 # TASKS:
-# 1. Presents a text-based menu to select target VMs.
+# 1. Presents a sorted, text-based menu to select target VMs.
 # 2. Gracefully shuts down running VMs one by one for maximum stability.
 # 3. Offers multiple operational modes for the selected VMs.
 # 4. Shows current VM config and asks for final confirmation before changing.
@@ -116,19 +116,19 @@ shutdown_vm() {
 
 # Function for a stable, text-based VM selection
 select_vms_text() {
-    # All display output goes to stderr >&2, so it doesn't get captured by command substitution.
     clear >&2
     print_info "Available VMs on this host:" >&2
     echo "------------------------------------------------------------------" >&2
-    qm list | awk 'NR>1 {printf "  VM %-5s %s\n", $1, $2}' >&2
+    # Display the list from the globally populated array, sorted by VMID
+    for vmid in $(echo "${!VM_NAMES[@]}" | tr ' ' '\n' | sort -n); do
+        printf "  VM %-5s %s\n" "$vmid" "${VM_NAMES[$vmid]}"
+    done >&2
     echo "------------------------------------------------------------------" >&2
     echo >&2
     print_info "Enter the VM IDs you want to process, separated by spaces." >&2
     
-    # The prompt from read -p goes to stderr by default.
     read -p "Or press [Enter] to process all VMs: " selected_vms_str
 
-    # Echo the result to stdout so it can be captured by the calling command.
     if [ -z "$selected_vms_str" ]; then
         echo "all"
     else
@@ -139,54 +139,64 @@ select_vms_text() {
 
 # --- Main Script ---
 failures=()
+declare -A VM_NAMES
 
 if [ "$(id -u)" -ne 0 ]; then
     print_error "This script must be run as root."
     exit 1
 fi
 
+# --- Populate VM List ---
+while read -r vmid vmname; do
+    VM_NAMES[$vmid]=$vmname
+done < <(qm list | awk 'NR>1 {print $1, $2}')
+
 # --- VM Selection ---
 selected_vms_input=$(select_vms_text)
-all_vms_list_full=$(qm list)
 clear
 
+raw_vms_input=()
 if [[ "$selected_vms_input" == "all" ]]; then
-    all_vms=($(echo "$all_vms_list_full" | awk 'NR>1 {print $1}'))
-    print_info "All VMs have been selected for processing."
+    raw_vms_input=("${!VM_NAMES[@]}")
+    print_info "All VMs were selected. Validating list..."
 else
-    all_vms=($selected_vms_input)
+    raw_vms_input=($selected_vms_input)
 fi
+
+# --- Validate selected VMs and build a clean, sorted list ---
+all_vms_unsorted=()
+if [ ${#raw_vms_input[@]} -gt 0 ]; then
+    for vmid in "${raw_vms_input[@]}"; do
+        if [[ -v VM_NAMES[$vmid] ]] && [ -f "/etc/pve/qemu-server/${vmid}.conf" ]; then
+            all_vms_unsorted+=("$vmid")
+        else
+            print_warning "VM ID '$vmid' is not valid or its config file is missing. It will be skipped."
+        fi
+    done
+fi
+
+# Sort the final list of VMs to be processed
+all_vms=($(for vmid in "${all_vms_unsorted[@]}"; do echo "$vmid"; done | sort -n))
 
 if [ ${#all_vms[@]} -gt 0 ]; then
     echo
-    print_info "The following VMs will be processed:"
+    print_info "The following valid VMs will be processed:"
     for vmid in "${all_vms[@]}"; do
-        # Validate that the provided ID exists before printing
-        vm_name=$(echo "$all_vms_list_full" | grep " $vmid " | awk '{print $2}')
-        if [ -n "$vm_name" ]; then
-            # Get current config directly from the file for consistency
-            conf_file="/etc/pve/qemu-server/${vmid}.conf"
-            if [ -f "$conf_file" ]; then
-                # Use tail -n 1 to get only the last (effective) line
-                machine=$(grep '^machine:' "$conf_file" | tail -n 1 | awk '{print $2}')
-                if [ -z "$machine" ]; then machine="i440fx (default)"; fi
-                cpu=$(grep '^cpu:' "$conf_file" | tail -n 1 | awk '{print $2}')
-                if [ -z "$cpu" ]; then cpu="kvm64 (default)"; fi
-                vga=$(grep '^vga:' "$conf_file" | tail -n 1 | awk '{$1=""; print $0}' | xargs)
-                if [ -z "$vga" ]; then vga="default"; fi
-                
-                echo -e "  - VM ${YELLOW}$vmid ($vm_name)${NC} | Machine: ${GREEN}$machine${NC}, CPU: ${GREEN}$cpu${NC}, VGA: ${GREEN}$vga${NC}"
-            else
-                print_warning "Config file for VM $vmid not found. Cannot display details."
-            fi
-        else
-            print_warning "VM ID '$vmid' is not valid and will be skipped."
-        fi
+        vm_name=${VM_NAMES[$vmid]}
+        conf_file="/etc/pve/qemu-server/${vmid}.conf"
+        machine=$(grep '^machine:' "$conf_file" | tail -n 1 | awk '{print $2}')
+        if [ -z "$machine" ]; then machine="i440fx (default)"; fi
+        cpu=$(grep '^cpu:' "$conf_file" | tail -n 1 | awk '{print $2}')
+        if [ -z "$cpu" ]; then cpu="kvm64 (default)"; fi
+        vga=$(grep '^vga:' "$conf_file" | tail -n 1 | awk '{$1=""; print $0}' | xargs)
+        if [ -z "$vga" ]; then vga="default"; fi
+        
+        echo -e "  - VM ${YELLOW}$vmid ($vm_name)${NC} | Machine: ${GREEN}$machine${NC}, CPU: ${GREEN}$cpu${NC}, VGA: ${GREEN}$vga${NC}"
     done
     echo
 else
-    print_warning "No valid VMs selected. Exiting."
-    exit 0
+    print_error "No valid VMs selected to process. Exiting."
+    exit 1
 fi
 
 
@@ -253,19 +263,11 @@ fi
 
 total_vms=${#all_vms[@]}
 processed_vms=0
-if [ "$total_vms" -eq 0 ]; then print_info "No VMs to process. Exiting."; exit 0; fi
-
 print_overall_progress 0 "$total_vms"
 
 for vmid in "${all_vms[@]}"; do
-    vm_name=$(echo "$all_vms_list_full" | grep " $vmid " | awk '{print $2}')
+    vm_name=${VM_NAMES[$vmid]}
     conf_file="/etc/pve/qemu-server/${vmid}.conf"
-    # Skip invalid IDs that might have been entered
-    if [ -z "$vm_name" ] || [ ! -f "$conf_file" ]; then
-        ((processed_vms++))
-        print_overall_progress "$processed_vms" "$total_vms"
-        continue
-    fi
     
     echo; echo "-----------------------------------------------------------------"
     print_info "Processing VM $vmid ($vm_name)..."
