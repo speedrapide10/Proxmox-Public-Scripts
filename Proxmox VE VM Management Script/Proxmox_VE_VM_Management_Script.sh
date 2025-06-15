@@ -4,14 +4,14 @@
 # Proxmox VE VM Management Script
 #
 # Author: speedrapide10
-# Version: 15.4 (Final & Stable)
+# Version: 15.5 (Final & Stable)
 # Tested on: Proxmox VE 8.4.1
 #
 # This script provides a robust, safe, and reliable method for automating
 # common VM management tasks on a Proxmox VE host.
 #
 # TASKS:
-# 1. Presents a sorted, text-based menu to select target VMs.
+# 1. Presents a text-based menu to select target VMs.
 # 2. Gracefully shuts down running VMs one by one for maximum stability.
 # 3. Offers multiple operational modes for the selected VMs.
 # 4. Shows current VM config and asks for final confirmation before changing.
@@ -116,10 +116,11 @@ shutdown_vm() {
 
 # Function for a stable, text-based VM selection
 select_vms_text() {
+    # All display output goes to stderr >&2, so it doesn't get captured by command substitution.
     clear >&2
     print_info "Available VMs on this host:" >&2
     echo "------------------------------------------------------------------" >&2
-    # Display the list from the globally populated array, sorted by VMID
+    # Use the globally declared associative array to store VM names by ID
     for vmid in $(echo "${!VM_NAMES[@]}" | tr ' ' '\n' | sort -n); do
         printf "  VM %-5s %s\n" "$vmid" "${VM_NAMES[$vmid]}"
     done >&2
@@ -127,7 +128,7 @@ select_vms_text() {
     echo >&2
     print_info "Enter the VM IDs you want to process, separated by spaces." >&2
     
-    read -p "Or press [Enter] to process all VMs: " selected_vms_str
+    read -p "Or press [Enter] to process all VMs: " selected_vms_str < /dev/tty
 
     if [ -z "$selected_vms_str" ]; then
         echo "all"
@@ -164,24 +165,23 @@ else
 fi
 
 # --- Validate selected VMs and build a clean, sorted list ---
-all_vms_unsorted=()
+all_vms=()
 if [ ${#raw_vms_input[@]} -gt 0 ]; then
     for vmid in "${raw_vms_input[@]}"; do
         if [[ -v VM_NAMES[$vmid] ]] && [ -f "/etc/pve/qemu-server/${vmid}.conf" ]; then
-            all_vms_unsorted+=("$vmid")
+            all_vms+=("$vmid")
         else
             print_warning "VM ID '$vmid' is not valid or its config file is missing. It will be skipped."
         fi
     done
 fi
 
-# Sort the final list of VMs to be processed
-all_vms=($(for vmid in "${all_vms_unsorted[@]}"; do echo "$vmid"; done | sort -n))
-
 if [ ${#all_vms[@]} -gt 0 ]; then
     echo
     print_info "The following valid VMs will be processed:"
-    for vmid in "${all_vms[@]}"; do
+    # Sort the final list of VMs to be processed for display
+    sorted_vms=($(for vmid in "${all_vms[@]}"; do echo "$vmid"; done | sort -n))
+    for vmid in "${sorted_vms[@]}"; do
         vm_name=${VM_NAMES[$vmid]}
         conf_file="/etc/pve/qemu-server/${vmid}.conf"
         machine=$(grep '^machine:' "$conf_file" | tail -n 1 | awk '{print $2}')
@@ -211,7 +211,7 @@ while true; do
     echo "  [5] Set custom SPICE Memory (no snapshot change)"
     echo "  [6] Revert SPICE Memory to Default (no snapshot change)"
     echo "  [7] Replace last snapshot only"
-    read -p "Your choice: " op_choice
+    read -p "Your choice: " op_choice < /dev/tty
     case $op_choice in
         1) OPERATION_MODE="i440fx-to-q35"; break;;
         2) OPERATION_MODE="q35-to-i440fx"; break;;
@@ -226,17 +226,17 @@ done
 
 if [ "$OPERATION_MODE" == "set-spice-mem" ]; then
     while true; do
-        read -p "Enter desired SPICE memory in MB (e.g., 32, 64, 128): " SPICE_MEM_VALUE
+        read -p "Enter desired SPICE memory in MB (e.g., 32, 64, 128): " SPICE_MEM_VALUE < /dev/tty
         if [[ "$SPICE_MEM_VALUE" =~ ^[0-9]+$ ]]; then break; else print_error "Invalid input. Please enter a number."; fi
     done
 fi
 
-read -p "Enable Dry Run mode? (y/N): " dry_run_choice
+read -p "Enable Dry Run mode? (y/N): " dry_run_choice < /dev/tty
 dry_run_choice=${dry_run_choice:-n}
 dry_run_lower=$(echo "$dry_run_choice" | tr '[:upper:]' '[:lower:]')
 if [[ "$dry_run_lower" == "y" || "$dry_run_lower" == "yes" ]]; then DRY_RUN=true; else DRY_RUN=false; fi
 
-read -p "Enable logging to a file? (Y/n): " log_choice
+read -p "Enable logging to a file? (Y/n): " log_choice < /dev/tty
 log_choice=${log_choice:-y}
 log_lower=$(echo "$log_choice" | tr '[:upper:]' '[:lower:]')
 if [[ "$log_lower" == "y" || "$log_lower" == "yes" ]]; then ENABLE_LOGGING=true; else ENABLE_LOGGING=false; fi
@@ -255,7 +255,7 @@ if [ "$DRY_RUN" = true ]; then
     print_info "DRY RUN mode is enabled. No actual changes will be made."
 else
     print_warning "DRY RUN mode is disabled. The script will perform actual changes."
-    read -p "Are you sure you want to continue? (Y/n): " confirm
+    read -p "Are you sure you want to continue? (Y/n): " confirm < /dev/tty
     confirm=${confirm:-y}
     confirm_lower=$(echo "$confirm" | tr '[:upper:]' '[:lower:]')
     if [[ "$confirm_lower" != "y" && "$confirm_lower" != "yes" ]]; then echo "Aborting."; exit 0; fi
@@ -292,7 +292,7 @@ for vmid in "${all_vms[@]}"; do
             action_needed=true
             print_info "Current VGA setting: $(grep '^vga:' "$conf_file" || echo "vga: (default)")"
             if [ "$DRY_RUN" = true ]; then print_info "[DRY RUN] Would set SPICE memory to '$SPICE_MEM_VALUE' MB."; else
-                read -p "Proceed with this change for VM $vmid? (Y/n): " change_confirm
+                read -p "Proceed with this change for VM $vmid? (Y/n): " change_confirm < /dev/tty
                 if [[ "${change_confirm:-y}" =~ ^[Yy]$ ]]; then
                     print_info "Editing $conf_file to set VGA/SPICE memory to '$SPICE_MEM_VALUE' MB..."
                     if grep -q "^vga:" "$conf_file"; then
@@ -312,7 +312,7 @@ for vmid in "${all_vms[@]}"; do
             action_needed=true
             print_info "Current VGA setting: $(grep '^vga:' "$conf_file" || echo "vga: (default)")"
             if [ "$DRY_RUN" = true ]; then print_info "[DRY RUN] Would revert SPICE memory to default."; else
-                read -p "Proceed with this change for VM $vmid? (Y/n): " change_confirm
+                read -p "Proceed with this change for VM $vmid? (Y/n): " change_confirm < /dev/tty
                 if [[ "${change_confirm:-y}" =~ ^[Yy]$ ]]; then
                     print_info "Editing $conf_file to revert SPICE memory to default..."
                     if ! sed -i 's/,memory=[0-9]*//' "$conf_file"; then
@@ -333,7 +333,7 @@ for vmid in "${all_vms[@]}"; do
             if [ -n "$new_machine_type" ]; then
                 action_needed=true; snapshot_action_needed=true
                 if [ "$DRY_RUN" = true ]; then print_info "[DRY RUN] Would change machine type from '$machine_type' to '$new_machine_type'."; else
-                    read -p "Change machine from '$machine_type' to '$new_machine_type' for VM $vmid? (Y/n): " change_confirm
+                    read -p "Change machine from '$machine_type' to '$new_machine_type' for VM $vmid? (Y/n): " change_confirm < /dev/tty
                     if [[ "${change_confirm:-y}" =~ ^[Yy]$ ]]; then
                         print_info "Changing machine type..."
                         if ! error_output=$(qm set "$vmid" --machine "$new_machine_type" 2>&1); then
@@ -355,7 +355,7 @@ for vmid in "${all_vms[@]}"; do
             if [ "$current_cpu" == "$source_cpu" ]; then
                 action_needed=true; snapshot_action_needed=true
                 if [ "$DRY_RUN" = true ]; then print_info "[DRY RUN] Would change CPU type from '$source_cpu' to '$target_cpu'."; else
-                    read -p "Change CPU from '$source_cpu' to '$target_cpu' for VM $vmid? (Y/n): " change_confirm
+                    read -p "Change CPU from '$source_cpu' to '$target_cpu' for VM $vmid? (Y/n): " change_confirm < /dev/tty
                     if [[ "${change_confirm:-y}" =~ ^[Yy]$ ]]; then
                         print_info "Changing CPU type..."
                         if ! error_output=$(qm set "$vmid" --cpu "$target_cpu" 2>&1); then
@@ -383,7 +383,7 @@ for vmid in "${all_vms[@]}"; do
                 snap_choice=""
                 if [ "$DRY_RUN" = true ]; then snap_choice=2; else
                     while true; do
-                        read -p "Snapshot action: [1] Create New, [2] Replace Last, [3] Do Nothing: " snap_choice
+                        read -p "Snapshot action: [1] Create New, [2] Replace Last, [3] Do Nothing: " snap_choice < /dev/tty
                         case $snap_choice in
                             1|2|3) break;;
                             *) print_error "Invalid selection.";;
