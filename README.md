@@ -7,7 +7,7 @@ A powerful, interactive Bash script designed to automate and streamline common v
 Execute the script directly on your Proxmox VE node with this single command.
 
 ```bash
-curl -sL https://raw.githubusercontent.com/speedrapide10/Proxmox-Public-Scripts/main/Proxmox%20VE%20VM%20Management%20Script/Proxmox_VE_VM_Management_Script.sh | bash
+curl -sL https://raw.githubusercontent.com/speedrapide10/Proxmox-Public-Scripts/main/Proxmox_VE_VM_Management_Script.sh | bash
 ```
 
 > **Security Warning:** Always exercise caution when running scripts from the internet directly with `sudo`. It is highly recommended to review the code before execution to ensure it meets your security standards.
