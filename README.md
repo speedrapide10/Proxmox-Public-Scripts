@@ -2,6 +2,9 @@
 
 A powerful, interactive Bash script designed to automate and streamline common virtual machine (VM) management tasks on a Proxmox VE host. This tool is built for sysadmins and power users who need to perform bulk operations safely and efficiently without navigating the web UI for every change.
 
+![image](https://github.com/user-attachments/assets/43413c54-51e5-4345-8abb-94969d38f6d4)
+![image](https://github.com/user-attachments/assets/2ad3c2c7-9e82-4215-a7b3-14dc412f8c9c)
+
 ## 🚀 Quick Start: Run It Anywhere
 
 Execute the script directly on your Proxmox VE node with this single command.
