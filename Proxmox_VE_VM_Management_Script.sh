@@ -4,7 +4,7 @@
 # Proxmox VE VM Management Script
 #
 # Author: speedrapide10
-# Version: 15.5 (Final & Stable)
+# Version: 16.0 (Global Snapshot Choice)
 # Tested on: Proxmox VE 8.4.1
 #
 # This script provides a robust, safe, and reliable method for automating
@@ -14,12 +14,11 @@
 # 1. Presents a text-based menu to select target VMs.
 # 2. Gracefully shuts down running VMs one by one for maximum stability.
 # 3. Offers multiple operational modes for the selected VMs.
-# 4. Shows current VM config and asks for final confirmation before changing.
-# 5. Asks for snapshot action (New, Replace, or None) after successful changes.
-# 6. Restarts the VM if it was previously running.
-# 7. Provides a dynamic, dependency-free progress bar.
-# 8. Optionally logs all output to a file, based on user input.
-# 9. Reports specific error messages and provides a summary of all failures at the end.
+# 4. Asks for a single, global snapshot action for the entire batch.
+# 5. Restarts the VM if it was previously running.
+# 6. Provides a dynamic, dependency-free progress bar.
+# 7. Optionally logs all output to a file, based on user input.
+# 8. Reports specific error messages and provides a summary of all failures at the end.
 #
 # =============================================================================
 
@@ -116,7 +115,6 @@ shutdown_vm() {
 
 # Function for a stable, text-based VM selection
 select_vms_text() {
-    # All display output goes to stderr >&2, so it doesn't get captured by command substitution.
     clear >&2
     print_info "Available VMs on this host:" >&2
     echo "------------------------------------------------------------------" >&2
@@ -176,12 +174,13 @@ if [ ${#raw_vms_input[@]} -gt 0 ]; then
     done
 fi
 
+# Sort the final list of VMs to be processed
+all_vms=($(for vmid in "${all_vms[@]}"; do echo "$vmid"; done | sort -n))
+
 if [ ${#all_vms[@]} -gt 0 ]; then
     echo
     print_info "The following valid VMs will be processed:"
-    # Sort the final list of VMs to be processed for display
-    sorted_vms=($(for vmid in "${all_vms[@]}"; do echo "$vmid"; done | sort -n))
-    for vmid in "${sorted_vms[@]}"; do
+    for vmid in "${all_vms[@]}"; do
         vm_name=${VM_NAMES[$vmid]}
         conf_file="/etc/pve/qemu-server/${vmid}.conf"
         machine=$(grep '^machine:' "$conf_file" | tail -n 1 | awk '{print $2}')
@@ -230,6 +229,19 @@ if [ "$OPERATION_MODE" == "set-spice-mem" ]; then
         if [[ "$SPICE_MEM_VALUE" =~ ^[0-9]+$ ]]; then break; else print_error "Invalid input. Please enter a number."; fi
     done
 fi
+
+# Ask for snapshot action ONCE if the operation involves snapshots
+SNAPSHOT_ACTION_CHOICE=""
+if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
+    while true; do
+        read -p "For all affected VMs, choose a snapshot action: [1] Create New, [2] Replace Last, [3] Do Nothing: " snap_choice_global < /dev/tty
+        case $snap_choice_global in
+            1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
+            *) print_error "Invalid selection.";;
+        esac
+    done
+fi
+
 
 read -p "Enable Dry Run mode? (y/N): " dry_run_choice < /dev/tty
 dry_run_choice=${dry_run_choice:-n}
@@ -381,15 +393,7 @@ for vmid in "${all_vms[@]}"; do
                 print_info "Found most recent snapshot: Name: '$latest_snapshot_name', Description: '$latest_snapshot_desc'"
                 
                 snap_choice=""
-                if [ "$DRY_RUN" = true ]; then snap_choice=2; else
-                    while true; do
-                        read -p "Snapshot action: [1] Create New, [2] Replace Last, [3] Do Nothing: " snap_choice < /dev/tty
-                        case $snap_choice in
-                            1|2|3) break;;
-                            *) print_error "Invalid selection.";;
-                        esac
-                    done
-                fi
+                if [ "$DRY_RUN" = true ]; then snap_choice=2; else snap_choice=$SNAPSHOT_ACTION_CHOICE; fi
 
                 case $snap_choice in
                     1) # Create New Snapshot
