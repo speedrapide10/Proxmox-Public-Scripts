@@ -4,15 +4,22 @@
 # Proxmox VE VM Management Script
 #
 # Author: speedrapide10
-# Version: 16.1 (Smart Shutdown & Global Confirm)
-# Testing on: Proxmox VE 8.4.6
+# Version: 16.1 (CLI Arguments)
+# Tested on: Proxmox VE 8.4.1
 #
 # This script provides a robust, safe, and reliable method for automating
 # common VM management tasks on a Proxmox VE host.
 #
+# USAGE:
+# To run interactively:
+# curl -sL [URL] | sudo bash
+#
+# To run on specific VMs (e.g., 101, 102):
+# curl -sL [URL] | sudo bash -s -- 101 102
+#
 # TASKS:
-# 1. Presents a text-based menu to select target VMs.
-# 2. Only shuts down VMs if a configuration change is actually required.
+# 1. Accepts VM IDs as command-line arguments to bypass interactive selection.
+# 2. Gracefully shuts down running VMs one by one for maximum stability.
 # 3. Offers multiple operational modes for the selected VMs.
 # 4. Asks for a single, global confirmation for bulk operations.
 # 5. Asks for a single, global snapshot action for the entire batch.
@@ -152,15 +159,21 @@ while read -r vmid vmname; do
 done < <(qm list | awk 'NR>1 {print $1, $2}')
 
 # --- VM Selection ---
-selected_vms_input=$(select_vms_text)
-clear
-
 raw_vms_input=()
-if [[ "$selected_vms_input" == "all" ]]; then
-    raw_vms_input=("${!VM_NAMES[@]}")
-    print_info "All VMs were selected. Validating list..."
+if [ "$#" -gt 0 ]; then
+    # Use command-line arguments if provided
+    raw_vms_input=("$@")
+    print_info "VM IDs provided via command line. Validating list..."
 else
-    raw_vms_input=($selected_vms_input)
+    # Otherwise, use the interactive menu
+    selected_vms_input=$(select_vms_text)
+    clear
+    if [[ "$selected_vms_input" == "all" ]]; then
+        raw_vms_input=("${!VM_NAMES[@]}")
+        print_info "All VMs were selected. Validating list..."
+    else
+        raw_vms_input=($selected_vms_input)
+    fi
 fi
 
 # --- Validate selected VMs and build a clean, sorted list ---
