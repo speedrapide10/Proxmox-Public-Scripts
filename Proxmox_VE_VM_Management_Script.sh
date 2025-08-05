@@ -129,20 +129,46 @@ select_vms_text() {
     clear >&2
     print_info "Available VMs on this host:" >&2
     echo "------------------------------------------------------------------" >&2
-    # Use the globally declared associative array to store VM names by ID
+    
+    local i=1
+    VMS_INDEXED=() # Reset and declare as indexed array
     for vmid in $(echo "${!VM_NAMES[@]}" | tr ' ' '\n' | sort -n); do
-        printf "  VM %-5s %s\n" "$vmid" "${VM_NAMES[$vmid]}"
-    done >&2
+        VMS_INDEXED+=("$vmid")
+        vm_name=${VM_NAMES[$vmid]}
+        conf_file="/etc/pve/qemu-server/${vmid}.conf"
+        if [ -f "$conf_file" ]; then
+            machine=$(grep '^machine:' "$conf_file" | tail -n 1 | awk '{print $2}')
+            if [ -z "$machine" ]; then machine="i440fx (default)"; fi
+            cpu=$(grep '^cpu:' "$conf_file" | tail -n 1 | awk '{print $2}')
+            if [ -z "$cpu" ]; then cpu="kvm64 (default)"; fi
+            vga=$(grep '^vga:' "$conf_file" | tail -n 1 | awk '{$1=""; print $0}' | xargs)
+            if [ -z "$vga" ]; then vga="default"; fi
+            
+            echo -e "  [${YELLOW}$i${NC}] - VM ${YELLOW}$vmid ($vm_name)${NC} | Machine: ${GREEN}$machine${NC}, CPU: ${GREEN}$cpu${NC}, VGA: ${GREEN}$vga${NC}" >&2
+        else
+            echo -e "  [${YELLOW}$i${NC}] - VM ${YELLOW}$vmid ($vm_name)${NC} | ${RED}Config file not found${NC}" >&2
+        fi
+        ((i++))
+    done
     echo "------------------------------------------------------------------" >&2
     echo >&2
-    print_info "Enter the VM IDs you want to process, separated by spaces." >&2
+    print_info "Enter the numbers of the VMs you want to process, separated by spaces." >&2
     
-    read -p "Or press [Enter] to process all VMs: " selected_vms_str < /dev/tty
+    read -p "Or press [Enter] to process all VMs: " selected_numbers_str < /dev/tty
 
-    if [ -z "$selected_vms_str" ]; then
+    if [ -z "$selected_numbers_str" ]; then
         echo "all"
     else
-        echo "$selected_vms_str"
+        local selected_vmids=""
+        for num in $selected_numbers_str; do
+            if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -gt 0 ] && [ "$num" -le "${#VMS_INDEXED[@]}" ]; then
+                index=$((num - 1))
+                selected_vmids+="${VMS_INDEXED[$index]} "
+            else
+                print_warning "Invalid number '$num' will be ignored." >&2
+            fi
+        done
+        echo "$selected_vmids"
     fi
 }
 
@@ -150,6 +176,7 @@ select_vms_text() {
 # --- Main Script ---
 failures=()
 declare -A VM_NAMES
+declare -a VMS_INDEXED
 
 if [ "$(id -u)" -ne 0 ]; then
     print_error "This script must be run as root."
