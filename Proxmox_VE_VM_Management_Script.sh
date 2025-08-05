@@ -244,6 +244,17 @@ if [ "$OPERATION_MODE" == "set-spice-mem" ]; then
     done
 fi
 
+if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440fx" ]]; then
+    while true; do
+        read -p "Use latest version (default) or specify a version? [1] Latest, [2] Specific: " ver_choice < /dev/tty
+        ver_choice=${ver_choice:-1}
+        if [[ "$ver_choice" == "1" || "$ver_choice" == "2" ]]; then break; else print_error "Invalid selection."; fi
+    done
+    if [ "$ver_choice" -eq 2 ]; then
+        read -p "Enter the full machine type string (e.g., pc-q35-8.1): " SPECIFIC_MACHINE_VERSION < /dev/tty
+    fi
+fi
+
 SNAPSHOT_ACTION_CHOICE=""
 if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
     while true; do
@@ -379,16 +390,24 @@ for vmid in "${all_vms[@]}"; do
                 ;;
             i440fx-to-q35)
                 new_machine_type="q35"
+                if [ "$ver_choice" -eq 2 ]; then new_machine_type=$SPECIFIC_MACHINE_VERSION; fi
                 print_info "Changing machine type of VM $vmid ($vm_name) to '$new_machine_type'..."
                 if ! error_output=$(qm set "$vmid" --machine "$new_machine_type" 2>&1); then
                     err_msg="Failed to change machine type for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output"); config_change_successful=false
                 fi
                 ;;
             q35-to-i440fx)
-                new_machine_type="pc-i440fx-9.2+pve1"
-                print_info "Changing machine type of VM $vmid ($vm_name) to '$new_machine_type'..."
-                if ! error_output=$(qm set "$vmid" --machine "$new_machine_type" 2>&1); then
-                    err_msg="Failed to change machine type for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output"); config_change_successful=false
+                if [ "$ver_choice" -eq 2 ]; then
+                    new_machine_type=$SPECIFIC_MACHINE_VERSION
+                    print_info "Changing machine type of VM $vmid ($vm_name) to '$new_machine_type'..."
+                    if ! error_output=$(qm set "$vmid" --machine "$new_machine_type" 2>&1); then
+                        err_msg="Failed to change machine type for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output"); config_change_successful=false
+                    fi
+                else
+                    print_info "Removing 'machine:' line from '$conf_file' to revert to default (latest i440fx)..."
+                    if ! sed -i '/^machine:/d' "$conf_file"; then
+                        err_msg="Failed to edit config file for VM $vmid ($vm_name)."; print_error "$err_msg"; failures+=("$err_msg"); config_change_successful=false
+                    fi
                 fi
                 ;;
             cpu-v2-to-v3)
