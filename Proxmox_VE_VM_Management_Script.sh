@@ -5,7 +5,7 @@
 #
 # Author: speedrapide10
 # Version: 16.2 (CLI Arguments)
-# Tested on: Proxmox VE 8.4.1
+# Tested on: Proxmox VE 8.4.8
 #
 # This script provides a robust, safe, and reliable method for automating
 # common VM management tasks on a Proxmox VE host.
@@ -75,15 +75,18 @@ print_overall_progress() {
     local current=$1
     local total=$2
     local term_width=${COLUMNS:-80}
-    local bar_width=$((term_width - 30))
+    # More conservative padding for text like "Overall Progress: [] 100% (XX/XX)"
+    local bar_width=$((term_width - 35))
     if [ "$bar_width" -lt 10 ]; then bar_width=10; fi
     local percentage=$((current * 100 / total))
     local filled_length=$((bar_width * percentage / 100))
     local bar=$(printf "%*s" "$filled_length" | tr ' ' '#')
+    
+    # Use \r to return to the start of the line and \033[K to clear the rest of it
     if [ "$current" -eq "$total" ]; then
-        printf "\rOverall Progress: [${GREEN}%-${bar_width}s${NC}] %d%% (%d/%d)\n" "$bar" "$percentage" "$current" "$total"
+        printf "\rOverall Progress: [${GREEN}%-${bar_width}s${NC}] %d%% (%d/%d)\033[K\n" "$bar" "$percentage" "$current" "$total"
     else
-        printf "\rOverall Progress: [${GREEN}%-${bar_width}s${NC}] %d%% (%d/%d)" "$bar" "$percentage" "$current" "$total"
+        printf "\rOverall Progress: [${GREEN}%-${bar_width}s${NC}] %d%% (%d/%d)\033[K" "$bar" "$percentage" "$current" "$total"
     fi
 }
 
