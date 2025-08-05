@@ -20,7 +20,7 @@
 # TASKS:
 # 1. Accepts VM IDs as command-line arguments to bypass interactive selection.
 # 2. Gracefully shuts down running VMs one by one for maximum stability.
-# 3. Offers multiple operational modes for the selected VMs.
+# 3. Offers multiple operational modes for the selected VMs with clean exit options.
 # 4. Asks for a single, global confirmation for bulk operations.
 # 5. Asks for a single, global snapshot action for the entire batch.
 # 6. Restarts the VM if it was previously running.
@@ -254,6 +254,7 @@ while true; do
     echo "  [5] Set custom SPICE Memory (no snapshot change)"
     echo "  [6] Revert SPICE Memory to Default (no snapshot change)"
     echo "  [7] Replace last snapshot only"
+    echo "  [8] Exit Script"
     read -p "Your choice: " op_choice < /dev/tty
     case $op_choice in
         1) OPERATION_MODE="i440fx-to-q35"; break;;
@@ -263,7 +264,8 @@ while true; do
         5) OPERATION_MODE="set-spice-mem"; break;;
         6) OPERATION_MODE="revert-spice-mem"; break;;
         7) OPERATION_MODE="snapshot-only"; break;;
-        *) print_error "Invalid selection. Please enter a number from 1 to 7.";;
+        8) echo "Exiting script as requested."; exit 0;;
+        *) print_error "Invalid selection. Please enter a number from 1 to 8.";;
     esac
 done
 
@@ -288,9 +290,10 @@ fi
 SNAPSHOT_ACTION_CHOICE=""
 if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
     while true; do
-        read -p "For all affected VMs, choose a snapshot action: [1] Create New, [2] Replace Last, [3] Do Nothing: " snap_choice_global < /dev/tty
+        read -p "For all affected VMs, choose a snapshot action: [1] Create New, [2] Replace Last, [3] Do Nothing, [4] Cancel and Exit: " snap_choice_global < /dev/tty
         case $snap_choice_global in
             1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
+            4) echo "Exiting script as requested."; exit 0;;
             *) print_error "Invalid selection.";;
         esac
     done
@@ -333,6 +336,10 @@ else
     confirm_lower=$(echo "$confirm" | tr '[:upper:]' '[:lower:]')
     if [[ "$confirm_lower" != "y" && "$confirm_lower" != "yes" ]]; then echo "Aborting."; exit 0; fi
 fi
+
+echo
+print_warning "The script will now begin processing VMs. Interrupting the script (Ctrl+C) from this point may leave VMs in a stopped state."
+sleep 3
 
 total_vms=${#all_vms[@]}
 processed_vms=0
