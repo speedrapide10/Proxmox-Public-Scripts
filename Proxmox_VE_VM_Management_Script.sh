@@ -4,21 +4,29 @@
 # Proxmox VE VM Management Script
 #
 # Author: speedrapide10
-# Version: 16.0 (Global Snapshot Choice)
-# Tested on: Proxmox VE 8.4.1
+# Version: 16.2 (CLI Arguments)
+# Tested on: Proxmox VE 8.4.8
 #
 # This script provides a robust, safe, and reliable method for automating
 # common VM management tasks on a Proxmox VE host.
 #
+# USAGE:
+# To run interactively:
+# curl -sL [URL] | sudo bash
+#
+# To run on specific VMs (e.g., 101, 102):
+# curl -sL [URL] | sudo bash -s -- 101 102
+#
 # TASKS:
-# 1. Presents a text-based menu to select target VMs.
+# 1. Accepts VM IDs as command-line arguments to bypass interactive selection.
 # 2. Gracefully shuts down running VMs one by one for maximum stability.
-# 3. Offers multiple operational modes for the selected VMs.
-# 4. Asks for a single, global snapshot action for the entire batch.
-# 5. Restarts the VM if it was previously running.
-# 6. Provides a dynamic, dependency-free progress bar.
-# 7. Optionally logs all output to a file, based on user input.
-# 8. Reports specific error messages and provides a summary of all failures at the end.
+# 3. Offers multiple operational modes for the selected VMs with clean exit options.
+# 4. Asks for a single, global confirmation for bulk operations.
+# 5. Asks for a single, global snapshot action for the entire batch.
+# 6. Restarts the VM if it was previously running.
+# 7. Provides a dynamic, dependency-free progress bar.
+# 8. Optionally logs all output to a file, based on user input.
+# 9. Reports specific error messages and provides a summary of all failures at the end.
 #
 # =============================================================================
 
@@ -67,15 +75,18 @@ print_overall_progress() {
     local current=$1
     local total=$2
     local term_width=${COLUMNS:-80}
-    local bar_width=$((term_width - 30))
+    # More conservative padding for text like "Overall Progress: [] 100% (XX/XX)"
+    local bar_width=$((term_width - 35))
     if [ "$bar_width" -lt 10 ]; then bar_width=10; fi
     local percentage=$((current * 100 / total))
     local filled_length=$((bar_width * percentage / 100))
     local bar=$(printf "%*s" "$filled_length" | tr ' ' '#')
+    
+    # Use \r to return to the start of the line and \033[K to clear the rest of it
     if [ "$current" -eq "$total" ]; then
-        printf "\rOverall Progress: [${GREEN}%-${bar_width}s${NC}] %d%% (%d/%d)\n" "$bar" "$percentage" "$current" "$total"
+        printf "\rOverall Progress: [${GREEN}%-${bar_width}s${NC}] %d%% (%d/%d)\033[K\n" "$bar" "$percentage" "$current" "$total"
     else
-        printf "\rOverall Progress: [${GREEN}%-${bar_width}s${NC}] %d%% (%d/%d)" "$bar" "$percentage" "$current" "$total"
+        printf "\rOverall Progress: [${GREEN}%-${bar_width}s${NC}] %d%% (%d/%d)\033[K" "$bar" "$percentage" "$current" "$total"
     fi
 }
 
@@ -118,20 +129,46 @@ select_vms_text() {
     clear >&2
     print_info "Available VMs on this host:" >&2
     echo "------------------------------------------------------------------" >&2
-    # Use the globally declared associative array to store VM names by ID
+    
+    local i=1
+    VMS_INDEXED=() # Reset and declare as indexed array
     for vmid in $(echo "${!VM_NAMES[@]}" | tr ' ' '\n' | sort -n); do
-        printf "  VM %-5s %s\n" "$vmid" "${VM_NAMES[$vmid]}"
-    done >&2
+        VMS_INDEXED+=("$vmid")
+        vm_name=${VM_NAMES[$vmid]}
+        conf_file="/etc/pve/qemu-server/${vmid}.conf"
+        if [ -f "$conf_file" ]; then
+            machine=$(grep '^machine:' "$conf_file" | tail -n 1 | awk '{print $2}')
+            if [ -z "$machine" ]; then machine="i440fx (default)"; fi
+            cpu=$(grep '^cpu:' "$conf_file" | tail -n 1 | awk '{print $2}')
+            if [ -z "$cpu" ]; then cpu="kvm64 (default)"; fi
+            vga=$(grep '^vga:' "$conf_file" | tail -n 1 | awk '{$1=""; print $0}' | xargs)
+            if [ -z "$vga" ]; then vga="default"; fi
+            
+            echo -e "  [${YELLOW}$i${NC}] - VM ${YELLOW}$vmid ($vm_name)${NC} | Machine: ${GREEN}$machine${NC}, CPU: ${GREEN}$cpu${NC}, VGA: ${GREEN}$vga${NC}" >&2
+        else
+            echo -e "  [${YELLOW}$i${NC}] - VM ${YELLOW}$vmid ($vm_name)${NC} | ${RED}Config file not found${NC}" >&2
+        fi
+        ((i++))
+    done
     echo "------------------------------------------------------------------" >&2
     echo >&2
-    print_info "Enter the VM IDs you want to process, separated by spaces." >&2
+    print_info "Enter the numbers of the VMs you want to process, separated by spaces." >&2
     
-    read -p "Or press [Enter] to process all VMs: " selected_vms_str < /dev/tty
+    read -p "Or press [Enter] to process all VMs: " selected_numbers_str < /dev/tty
 
-    if [ -z "$selected_vms_str" ]; then
+    if [ -z "$selected_numbers_str" ]; then
         echo "all"
     else
-        echo "$selected_vms_str"
+        local selected_vmids=""
+        for num in $selected_numbers_str; do
+            if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -gt 0 ] && [ "$num" -le "${#VMS_INDEXED[@]}" ]; then
+                index=$((num - 1))
+                selected_vmids+="${VMS_INDEXED[$index]} "
+            else
+                print_warning "Invalid number '$num' will be ignored." >&2
+            fi
+        done
+        echo "$selected_vmids"
     fi
 }
 
@@ -139,6 +176,7 @@ select_vms_text() {
 # --- Main Script ---
 failures=()
 declare -A VM_NAMES
+declare -a VMS_INDEXED
 
 if [ "$(id -u)" -ne 0 ]; then
     print_error "This script must be run as root."
@@ -151,15 +189,21 @@ while read -r vmid vmname; do
 done < <(qm list | awk 'NR>1 {print $1, $2}')
 
 # --- VM Selection ---
-selected_vms_input=$(select_vms_text)
-clear
-
 raw_vms_input=()
-if [[ "$selected_vms_input" == "all" ]]; then
-    raw_vms_input=("${!VM_NAMES[@]}")
-    print_info "All VMs were selected. Validating list..."
+if [ "$#" -gt 0 ]; then
+    # Use command-line arguments if provided
+    raw_vms_input=("$@")
+    print_info "VM IDs provided via command line. Validating list..."
 else
-    raw_vms_input=($selected_vms_input)
+    # Otherwise, use the interactive menu
+    selected_vms_input=$(select_vms_text)
+    clear
+    if [[ "$selected_vms_input" == "all" ]]; then
+        raw_vms_input=("${!VM_NAMES[@]}")
+        print_info "All VMs were selected. Validating list..."
+    else
+        raw_vms_input=($selected_vms_input)
+    fi
 fi
 
 # --- Validate selected VMs and build a clean, sorted list ---
@@ -210,6 +254,7 @@ while true; do
     echo "  [5] Set custom SPICE Memory (no snapshot change)"
     echo "  [6] Revert SPICE Memory to Default (no snapshot change)"
     echo "  [7] Replace last snapshot only"
+    echo "  [8] Exit Script"
     read -p "Your choice: " op_choice < /dev/tty
     case $op_choice in
         1) OPERATION_MODE="i440fx-to-q35"; break;;
@@ -219,7 +264,8 @@ while true; do
         5) OPERATION_MODE="set-spice-mem"; break;;
         6) OPERATION_MODE="revert-spice-mem"; break;;
         7) OPERATION_MODE="snapshot-only"; break;;
-        *) print_error "Invalid selection. Please enter a number from 1 to 7.";;
+        8) echo "Exiting script as requested."; exit 0;;
+        *) print_error "Invalid selection. Please enter a number from 1 to 8.";;
     esac
 done
 
@@ -230,18 +276,36 @@ if [ "$OPERATION_MODE" == "set-spice-mem" ]; then
     done
 fi
 
-# Ask for snapshot action ONCE if the operation involves snapshots
+if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440fx" ]]; then
+    while true; do
+        read -p "Use latest version (default) or specify a version? [1] Latest, [2] Specific: " ver_choice < /dev/tty
+        ver_choice=${ver_choice:-1}
+        if [[ "$ver_choice" == "1" || "$ver_choice" == "2" ]]; then break; else print_error "Invalid selection."; fi
+    done
+    if [ "$ver_choice" -eq 2 ]; then
+        read -p "Enter the full machine type string (e.g., pc-q35-8.1): " SPECIFIC_MACHINE_VERSION < /dev/tty
+    fi
+fi
+
 SNAPSHOT_ACTION_CHOICE=""
 if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
     while true; do
-        read -p "For all affected VMs, choose a snapshot action: [1] Create New, [2] Replace Last, [3] Do Nothing: " snap_choice_global < /dev/tty
+        read -p "For all affected VMs, choose a snapshot action: [1] Create New, [2] Replace Last, [3] Do Nothing, [4] Cancel and Exit: " snap_choice_global < /dev/tty
         case $snap_choice_global in
             1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
+            4) echo "Exiting script as requested."; exit 0;;
             *) print_error "Invalid selection.";;
         esac
     done
 fi
 
+GLOBAL_CONFIRM=false
+if [ ${#all_vms[@]} -gt 1 ]; then
+    read -p "Apply changes to all selected VMs without individual confirmation? (Y/n): " global_confirm_choice < /dev/tty
+    if [[ "${global_confirm_choice:-y}" =~ ^[Yy]$ ]]; then
+        GLOBAL_CONFIRM=true
+    fi
+fi
 
 read -p "Enable Dry Run mode? (y/N): " dry_run_choice < /dev/tty
 dry_run_choice=${dry_run_choice:-n}
@@ -257,9 +321,9 @@ LOG_FILE_PATH="/tmp/replace_cpu_model-$(date +"%Y%m%d-%H%M%S").log"
 if [ "$ENABLE_LOGGING" = true ]; then touch "$LOG_FILE_PATH"; print_info "Logging enabled. Log file at: $LOG_FILE_PATH"; fi
 
 echo
-print_warning "This script will shut down all running selected VMs."
+print_warning "This script will shut down all running selected VMs *that require changes*."
 if [[ "$OPERATION_MODE" != "snapshot-only" && "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
-    print_warning "It will also delete and recreate snapshots, which is a destructive action."
+    print_warning "It may also delete and recreate snapshots, which is a destructive action."
 fi
 echo
 
@@ -273,6 +337,10 @@ else
     if [[ "$confirm_lower" != "y" && "$confirm_lower" != "yes" ]]; then echo "Aborting."; exit 0; fi
 fi
 
+echo
+print_warning "The script will now begin processing VMs. Interrupting the script (Ctrl+C) from this point may leave VMs in a stopped state."
+sleep 3
+
 total_vms=${#all_vms[@]}
 processed_vms=0
 print_overall_progress 0 "$total_vms"
@@ -284,8 +352,38 @@ for vmid in "${all_vms[@]}"; do
     echo; echo "-----------------------------------------------------------------"
     print_info "Processing VM $vmid ($vm_name)..."
     
-    action_needed=false; config_change_successful=true; snapshot_action_needed=false; was_running=false
+    action_needed=false; config_change_successful=true; snapshot_action_needed=false;
     
+    # --- Pre-check to see if any action is needed before shutting down ---
+    case "$OPERATION_MODE" in
+        snapshot-only) action_needed=true; snapshot_action_needed=true ;;
+        set-spice-mem) action_needed=true ;;
+        revert-spice-mem) action_needed=true ;;
+        i440fx-to-q35)
+            machine_type=$(grep '^machine:' "$conf_file" | tail -n 1 | awk '{print $2}'); if [ -z "$machine_type" ]; then machine_type="i440fx"; fi
+            if [[ "$machine_type" == *"i440fx"* ]]; then action_needed=true; snapshot_action_needed=true; fi
+            ;;
+        q35-to-i440fx)
+            machine_type=$(grep '^machine:' "$conf_file" | tail -n 1 | awk '{print $2}'); if [ -z "$machine_type" ]; then machine_type="i440fx"; fi
+            if [[ "$machine_type" == *"q35"* ]]; then action_needed=true; snapshot_action_needed=true; fi
+            ;;
+        cpu-v2-to-v3)
+            current_cpu=$(grep '^cpu:' "$conf_file" | tail -n 1 | awk '{print $2}'); if [ -z "$current_cpu" ]; then current_cpu="kvm64"; fi
+            if [[ "$current_cpu" == "x86-64-v2-AES" ]]; then action_needed=true; snapshot_action_needed=true; fi
+            ;;
+        cpu-v3-to-v2)
+            current_cpu=$(grep '^cpu:' "$conf_file" | tail -n 1 | awk '{print $2}'); if [ -z "$current_cpu" ]; then current_cpu="kvm64"; fi
+            if [[ "$current_cpu" == "x86-64-v3" ]]; then action_needed=true; snapshot_action_needed=true; fi
+            ;;
+    esac
+
+    if [ "$action_needed" = false ]; then
+        print_info "Configuration is already correct. Skipping all operations for this VM."
+        ((processed_vms++)); print_overall_progress "$processed_vms" "$total_vms"
+        continue
+    fi
+
+    was_running=false
     if [ "$(qm status "$vmid" 2>/dev/null | awk '{print $2}')" == "running" ]; then
         was_running=true
         if ! shutdown_vm "$vmid" "$vm_name"; then
@@ -297,90 +395,74 @@ for vmid in "${all_vms[@]}"; do
         print_info "VM $vmid ($vm_name) is already stopped."
     fi
 
-    # --- Determine action based on OPERATION_MODE ---
-    case "$OPERATION_MODE" in
-        snapshot-only) snapshot_action_needed=true ;;
-        set-spice-mem)
-            action_needed=true
-            print_info "Current VGA setting: $(grep '^vga:' "$conf_file" || echo "vga: (default)")"
-            if [ "$DRY_RUN" = true ]; then print_info "[DRY RUN] Would set SPICE memory to '$SPICE_MEM_VALUE' MB."; else
-                read -p "Proceed with this change for VM $vmid? (Y/n): " change_confirm < /dev/tty
-                if [[ "${change_confirm:-y}" =~ ^[Yy]$ ]]; then
-                    print_info "Editing $conf_file to set VGA/SPICE memory to '$SPICE_MEM_VALUE' MB..."
-                    if grep -q "^vga:" "$conf_file"; then
-                        sed -i 's/,memory=[0-9]*//' "$conf_file"
-                        sed -i "/^vga:/ s/$/\,memory=$SPICE_MEM_VALUE/" "$conf_file"
-                    else
-                        echo "vga: qxl,memory=$SPICE_MEM_VALUE" >> "$conf_file"
-                    fi
-                    if [ $? -ne 0 ]; then err_msg="Failed to edit config file for VM $vmid ($vm_name)."; print_error "$err_msg"; failures+=("$err_msg"); config_change_successful=false; fi
+    # --- Perform the actual action ---
+    proceed_with_change=true
+    if [ "$DRY_RUN" = false ] && [ "$GLOBAL_CONFIRM" = false ]; then
+        read -p "Proceed with operation for VM $vmid? (Y/n): " change_confirm < /dev/tty
+        if ! [[ "${change_confirm:-y}" =~ ^[Yy]$ ]]; then
+            proceed_with_change=false
+        fi
+    fi
+
+    if [ "$proceed_with_change" = false ]; then
+        print_info "Skipping change for VM $vmid as requested."
+        config_change_successful=false
+    else
+        case "$OPERATION_MODE" in
+            set-spice-mem)
+                print_info "Editing $conf_file to set VGA/SPICE memory to '$SPICE_MEM_VALUE' MB..."
+                if grep -q "^vga:" "$conf_file"; then
+                    sed -i 's/,memory=[0-9]*//' "$conf_file"
+                    sed -i "/^vga:/ s/$/\,memory=$SPICE_MEM_VALUE/" "$conf_file"
                 else
-                    print_info "Skipping change for VM $vmid as requested."
-                    config_change_successful=false
+                    echo "vga: qxl,memory=$SPICE_MEM_VALUE" >> "$conf_file"
                 fi
-            fi
-            ;;
-        revert-spice-mem)
-            action_needed=true
-            print_info "Current VGA setting: $(grep '^vga:' "$conf_file" || echo "vga: (default)")"
-            if [ "$DRY_RUN" = true ]; then print_info "[DRY RUN] Would revert SPICE memory to default."; else
-                read -p "Proceed with this change for VM $vmid? (Y/n): " change_confirm < /dev/tty
-                if [[ "${change_confirm:-y}" =~ ^[Yy]$ ]]; then
-                    print_info "Editing $conf_file to revert SPICE memory to default..."
-                    if ! sed -i 's/,memory=[0-9]*//' "$conf_file"; then
+                if [ $? -ne 0 ]; then err_msg="Failed to edit config file for VM $vmid ($vm_name)."; print_error "$err_msg"; failures+=("$err_msg"); config_change_successful=false; fi
+                ;;
+            revert-spice-mem)
+                print_info "Editing $conf_file to revert SPICE memory to default..."
+                if ! sed -i 's/,memory=[0-9]*//' "$conf_file"; then
+                    err_msg="Failed to edit config file for VM $vmid ($vm_name)."; print_error "$err_msg"; failures+=("$err_msg"); config_change_successful=false
+                fi
+                ;;
+            i440fx-to-q35)
+                new_machine_type="q35"
+                if [ "$ver_choice" -eq 2 ]; then new_machine_type=$SPECIFIC_MACHINE_VERSION; fi
+                print_info "Changing machine type of VM $vmid ($vm_name) to '$new_machine_type'..."
+                if ! error_output=$(qm set "$vmid" --machine "$new_machine_type" 2>&1); then
+                    err_msg="Failed to change machine type for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output"); config_change_successful=false
+                fi
+                ;;
+            q35-to-i440fx)
+                if [ "$ver_choice" -eq 2 ]; then
+                    new_machine_type=$SPECIFIC_MACHINE_VERSION
+                    print_info "Changing machine type of VM $vmid ($vm_name) to '$new_machine_type'..."
+                    if ! error_output=$(qm set "$vmid" --machine "$new_machine_type" 2>&1); then
+                        err_msg="Failed to change machine type for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output"); config_change_successful=false
+                    fi
+                else
+                    print_info "Removing 'machine:' line from '$conf_file' to revert to default (latest i440fx)..."
+                    if ! sed -i '/^machine:/d' "$conf_file"; then
                         err_msg="Failed to edit config file for VM $vmid ($vm_name)."; print_error "$err_msg"; failures+=("$err_msg"); config_change_successful=false
                     fi
-                else
-                    print_info "Skipping change for VM $vmid as requested."
-                    config_change_successful=false
                 fi
-            fi
-            ;;
-        i440fx-to-q35 | q35-to-i440fx)
-            machine_type=$(grep '^machine:' "$conf_file" | tail -n 1 | awk '{print $2}'); if [ -z "$machine_type" ]; then machine_type="i440fx"; fi
-            print_info "Current machine type: $machine_type."
-            new_machine_type=""
-            if [ "$OPERATION_MODE" == "i440fx-to-q35" ] && [[ "$machine_type" == *"i440fx"* ]]; then new_machine_type="q35"; fi
-            if [ "$OPERATION_MODE" == "q35-to-i440fx" ] && [[ "$machine_type" == *"q35"* ]]; then new_machine_type="pc-i440fx-9.2+pve1"; fi
-            if [ -n "$new_machine_type" ]; then
-                action_needed=true; snapshot_action_needed=true
-                if [ "$DRY_RUN" = true ]; then print_info "[DRY RUN] Would change machine type from '$machine_type' to '$new_machine_type'."; else
-                    read -p "Change machine from '$machine_type' to '$new_machine_type' for VM $vmid? (Y/n): " change_confirm < /dev/tty
-                    if [[ "${change_confirm:-y}" =~ ^[Yy]$ ]]; then
-                        print_info "Changing machine type..."
-                        if ! error_output=$(qm set "$vmid" --machine "$new_machine_type" 2>&1); then
-                            err_msg="Failed to change machine type for VM $vmid ($vm_name)."; print_error "$err_msg"
-                            print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output"); config_change_successful=false
-                        fi
-                    else
-                        print_info "Skipping change for VM $vmid as requested."; config_change_successful=false; snapshot_action_needed=false;
-                    fi
+                ;;
+            cpu-v2-to-v3)
+                target_cpu="x86-64-v3"
+                print_info "Changing CPU type of VM $vmid ($vm_name) to '$target_cpu'..."
+                if ! error_output=$(qm set "$vmid" --cpu "$target_cpu" 2>&1); then
+                    err_msg="Failed to change CPU type for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output"); config_change_successful=false
                 fi
-            fi
-            ;;
-        cpu-v2-to-v3 | cpu-v3-to-v2)
-            current_cpu=$(grep '^cpu:' "$conf_file" | tail -n 1 | awk '{print $2}'); if [ -z "$current_cpu" ]; then current_cpu="kvm64"; fi
-            print_info "Current CPU type: $current_cpu."
-            source_cpu=""; target_cpu=""
-            if [ "$OPERATION_MODE" == "cpu-v2-to-v3" ]; then source_cpu="x86-64-v2-AES"; target_cpu="x86-64-v3"; fi
-            if [ "$OPERATION_MODE" == "cpu-v3-to-v2" ]; then source_cpu="x86-64-v3"; target_cpu="x86-64-v2-AES"; fi
-            if [ "$current_cpu" == "$source_cpu" ]; then
-                action_needed=true; snapshot_action_needed=true
-                if [ "$DRY_RUN" = true ]; then print_info "[DRY RUN] Would change CPU type from '$source_cpu' to '$target_cpu'."; else
-                    read -p "Change CPU from '$source_cpu' to '$target_cpu' for VM $vmid? (Y/n): " change_confirm < /dev/tty
-                    if [[ "${change_confirm:-y}" =~ ^[Yy]$ ]]; then
-                        print_info "Changing CPU type..."
-                        if ! error_output=$(qm set "$vmid" --cpu "$target_cpu" 2>&1); then
-                            err_msg="Failed to change CPU type for VM $vmid ($vm_name)."; print_error "$err_msg"
-                            print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output"); config_change_successful=false
-                        fi
-                    else
-                        print_info "Skipping change for VM $vmid as requested."; config_change_successful=false; snapshot_action_needed=false;
-                    fi
+                ;;
+            cpu-v3-to-v2)
+                target_cpu="x86-64-v2-AES"
+                print_info "Changing CPU type of VM $vmid ($vm_name) to '$target_cpu'..."
+                if ! error_output=$(qm set "$vmid" --cpu "$target_cpu" 2>&1); then
+                    err_msg="Failed to change CPU type for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output"); config_change_successful=false
                 fi
-            fi
-            ;;
-    esac
+                ;;
+        esac
+    fi
 
     if [ "$snapshot_action_needed" = true ] && [ "$config_change_successful" = true ]; then
         print_info "Processing snapshots for VM $vmid ($vm_name)..."
@@ -398,33 +480,24 @@ for vmid in "${all_vms[@]}"; do
                 case $snap_choice in
                     1) # Create New Snapshot
                         new_snap_name="after_op_$(date +%Y%m%d_%H%M%S)"
-                        if [ "$DRY_RUN" = true ]; then print_info "[DRY RUN] Would create new snapshot '$new_snap_name'."; else
-                            print_info "Creating new snapshot named '$new_snap_name'..."
-                            if ! error_output=$(qm snapshot "$vmid" "$new_snap_name" --description "New snapshot created by script" 2>&1); then
-                                err_msg="Failed to create new snapshot for VM $vmid ($vm_name)."; print_error "$err_msg"
-                                print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
-                            fi
+                        print_info "Creating new snapshot named '$new_snap_name'..."
+                        if ! error_output=$(qm snapshot "$vmid" "$new_snap_name" --description "New snapshot created by script" 2>&1); then
+                            err_msg="Failed to create new snapshot for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
                         fi
                         ;;
                     2) # Replace Last Snapshot
-                        if [ "$DRY_RUN" = true ]; then print_info "[DRY RUN] Would delete snapshot '$latest_snapshot_name' and recreate it."; else
-                            print_info "Deleting snapshot '$latest_snapshot_name'..."
-                            if ! error_output=$(qm delsnapshot "$vmid" "$latest_snapshot_name" 2>&1); then
-                                err_msg="Failed to delete snapshot '$latest_snapshot_name' for VM $vmid ($vm_name)."; print_error "$err_msg"
-                                print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
+                        print_info "Deleting snapshot '$latest_snapshot_name'..."
+                        if ! error_output=$(qm delsnapshot "$vmid" "$latest_snapshot_name" 2>&1); then
+                            err_msg="Failed to delete snapshot '$latest_snapshot_name' for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
+                        else
+                            print_info "Recreating snapshot '$latest_snapshot_name'..."
+                            if [ -n "$latest_snapshot_desc" ] && [ "$latest_snapshot_desc" != "no-description" ]; then
+                                if ! error_output=$(qm snapshot "$vmid" "$latest_snapshot_name" --description "$latest_snapshot_desc" 2>&1); then
+                                    err_msg="Failed to recreate snapshot for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
+                                fi
                             else
-                                print_info "Recreating snapshot '$latest_snapshot_name'..."
-                                # Smartly handle description
-                                if [ -n "$latest_snapshot_desc" ] && [ "$latest_snapshot_desc" != "no-description" ]; then
-                                    if ! error_output=$(qm snapshot "$vmid" "$latest_snapshot_name" --description "$latest_snapshot_desc" 2>&1); then
-                                        err_msg="Failed to recreate snapshot '$latest_snapshot_name' for VM $vmid ($vm_name)."; print_error "$err_msg"
-                                        print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
-                                    fi
-                                else
-                                    if ! error_output=$(qm snapshot "$vmid" "$latest_snapshot_name" 2>&1); then
-                                        err_msg="Failed to recreate snapshot '$latest_snapshot_name' for VM $vmid ($vm_name)."; print_error "$err_msg"
-                                        print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
-                                    fi
+                                if ! error_output=$(qm snapshot "$vmid" "$latest_snapshot_name" 2>&1); then
+                                    err_msg="Failed to recreate snapshot for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
                                 fi
                             fi
                         fi
@@ -435,10 +508,6 @@ for vmid in "${all_vms[@]}"; do
                 esac
             fi
         fi
-    elif [ "$action_needed" = true ] && [ "$config_change_successful" = false ]; then
-        print_warning "Skipping snapshot operations for VM $vmid ($vm_name) due to a prior configuration change failure."
-    elif [ "$action_needed" = false ]; then
-        print_info "Configuration is already correct. Skipping all operations for this VM."
     fi
     
     if [ "$was_running" = true ]; then
