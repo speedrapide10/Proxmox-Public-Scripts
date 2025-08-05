@@ -7,7 +7,7 @@ A powerful, interactive Bash script designed to automate and streamline common v
 Execute the script directly on your Proxmox VE node with this single command for an interactive session.
 
 ```bash
-curl -sL https://raw.githubusercontent.com/speedrapide10/Proxmox-Public-Scripts/main/Proxmox%20VE%20VM%20Management%20Script/Proxmox_VE_VM_Management_Script.sh | sudo bash
+curl -sL https://raw.githubusercontent.com/speedrapide10/Proxmox-Public-Scripts/main/Proxmox_VE_VM_Management_Script.sh | bash
 ```
 
 > **Security Warning:** Always exercise caution when running scripts from the internet directly with `sudo`. It is highly recommended to review the code before execution to ensure it meets your security standards.
@@ -64,7 +64,7 @@ This script is more than just a simple automation tool; it's an interactive "mul
 
 This is the most common way to use the script. It provides a full menu-driven experience.
 
-1.  **Run the script** using the `curl | sudo bash` command.
+1.  **Run the script** using the `curl | bash` command.
     
 2.  **Select VMs:** You will be presented with a numbered list of all VMs on your host, complete with their current configuration.
     
@@ -100,12 +100,12 @@ This is the most common way to use the script. It provides a full menu-driven ex
 
 For faster operations or for use in your own scripts, you can bypass the interactive VM selection by providing a space-separated list of VM IDs as arguments.
 
-**Syntax:** `curl -sL [URL] | sudo bash -s -- <VMID1> <VMID2> <VMID3>`
+**Syntax:** `curl -sL [URL] | bash -s -- <VMID1> <VMID2> <VMID3>`
 
 **Example:** This command will load the script and immediately select VMs `101`, `102`, and `305` before proceeding to the main operations menu.
 
 ```bash
-curl -sL https://raw.githubusercontent.com/speedrapide10/Proxmox-Public-Scripts/main/Proxmox%20VE%20VM%20Management%20Script/Proxmox_VE_VM_Management_Script.sh | sudo bash -s -- 101 102 305
+curl -sL https://raw.githubusercontent.com/speedrapide10/Proxmox-Public-Scripts/main/Proxmox_VE_VM_Management_Script.sh | bash -s -- 101 102 305
 ```
 
 ## 🤝 Contributing & Feedback
