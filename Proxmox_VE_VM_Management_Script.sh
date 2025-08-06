@@ -343,7 +343,7 @@ while true; do
             done
             ;;
         6) OPERATION_MODE="snapshot-only"; break;;
-        7) echo "Exiting script as requested."; exit 0;;
+        7) echo; print_info "Exiting script as requested."; exit 0;;
         *) print_error "Invalid selection. Please enter a number from 1 to 7.";;
     esac
 done
@@ -372,7 +372,7 @@ if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice
         read -p "For all affected VMs, choose a snapshot action: [1] Create New, [2] Replace Last, [3] Do Nothing, [4] Cancel and Exit: " snap_choice_global < /dev/tty
         case $snap_choice_global in
             1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
-            4) echo "Exiting script as requested."; exit 0;;
+            4) echo; print_info "Exiting script as requested."; exit 0;;
             *) print_error "Invalid selection.";;
         esac
     done
