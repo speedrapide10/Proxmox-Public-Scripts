@@ -358,7 +358,7 @@ fi
 
 if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440fx" ]]; then
     while true; do
-        echo
+        clear
         print_info "Select machine version option:"
         echo "  [1] Use latest version (default)"
         echo "  [2] Specify a version manually"
@@ -367,7 +367,7 @@ if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440f
         ver_choice=${ver_choice:-1}
         case $ver_choice in
             1|2) break;;
-            3) continue 2;; # This is incorrect, needs to go back to the main loop
+            3) continue 2;;
             *) print_error "Invalid selection.";;
         esac
     done
@@ -379,7 +379,7 @@ fi
 SNAPSHOT_ACTION_CHOICE=""
 if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
     while true; do
-        echo
+        clear
         print_info "Snapshot Action for all affected VMs:"
         echo "  [1] Create New"
         echo "  [2] Replace Last"
@@ -388,7 +388,7 @@ if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice
         read -p "  Your choice: " snap_choice_global < /dev/tty
         case $snap_choice_global in
             1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
-            4) continue 2;; # This is incorrect, needs to go back to the main loop
+            4) continue 2;;
             *) print_error "Invalid selection.";;
         esac
     done
