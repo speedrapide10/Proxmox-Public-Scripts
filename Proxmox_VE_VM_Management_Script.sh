@@ -318,21 +318,33 @@ while true; do
     echo "  [2] Convert Machine: q35 -> i440fx (& replace snapshot)"
     echo "  [3] Convert CPU: x86-64-v2-AES -> x86-64-v3 (& replace snapshot)"
     echo "  [4] Convert CPU: x86-64-v3 -> x86-64-v2-AES (& replace snapshot)"
-    echo "  [5] Set custom SPICE Memory (no snapshot change)"
-    echo "  [6] Revert SPICE Memory to Default (no snapshot change)"
-    echo "  [7] Replace last snapshot only"
-    echo "  [8] Exit Script"
+    echo "  [5] Manage SPICE/VGA Memory"
+    echo "  [6] Manage Snapshots"
+    echo "  [7] Exit Script"
     read -p "Your choice: " op_choice < /dev/tty
     case $op_choice in
         1) OPERATION_MODE="i440fx-to-q35"; break;;
         2) OPERATION_MODE="q35-to-i440fx"; break;;
         3) OPERATION_MODE="cpu-v2-to-v3"; break;;
         4) OPERATION_MODE="cpu-v3-to-v2"; break;;
-        5) OPERATION_MODE="set-spice-mem"; break;;
-        6) OPERATION_MODE="revert-spice-mem"; break;;
-        7) OPERATION_MODE="snapshot-only"; break;;
-        8) echo "Exiting script as requested."; exit 0;;
-        *) print_error "Invalid selection. Please enter a number from 1 to 8.";;
+        5) 
+            while true; do
+                echo "  Select SPICE/VGA Memory option:"
+                echo "    [1] Set custom SPICE Memory"
+                echo "    [2] Revert SPICE Memory to Default"
+                echo "    [3] Back to Main Menu"
+                read -p "    Your choice: " spice_choice < /dev/tty
+                case $spice_choice in
+                    1) OPERATION_MODE="set-spice-mem"; break 2;;
+                    2) OPERATION_MODE="revert-spice-mem"; break 2;;
+                    3) break;;
+                    *) print_error "Invalid selection.";;
+                esac
+            done
+            ;;
+        6) OPERATION_MODE="snapshot-only"; break;;
+        7) echo "Exiting script as requested."; exit 0;;
+        *) print_error "Invalid selection. Please enter a number from 1 to 7.";;
     esac
 done
 
