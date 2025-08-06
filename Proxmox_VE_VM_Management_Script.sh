@@ -265,54 +265,52 @@ if [[ "$#" -gt 0 ]]; then
     print_info "VM IDs provided via command line. Validating list..."
 else
     selected_vms_input=$(select_vms_text)
-    clear
-    if [[ "$selected_vms_input" == "all" ]]; then
-        raw_vms_input=("${!VM_NAMES[@]}")
-        print_info "All VMs were selected. Validating list..."
-    else
-        raw_vms_input=($selected_vms_input)
-    fi
+    raw_vms_input=($selected_vms_input)
 fi
 
 # --- Validate selected VMs and build a clean, sorted list ---
 all_vms=()
 if [[ ${#raw_vms_input[@]} -gt 0 ]]; then
-    for vmid in "${raw_vms_input[@]}"; do
-        if [[ -v VM_NAMES[$vmid] && -f "/etc/pve/qemu-server/${vmid}.conf" ]]; then
-            all_vms+=("$vmid")
-        else
-            print_warning "VM ID '$vmid' is not valid or its config file is missing. It will be skipped."
-        fi
-    done
+    if [[ "${raw_vms_input[0]}" == "all" ]]; then
+        all_vms=("${!VM_NAMES[@]}")
+    else
+        for vmid in "${raw_vms_input[@]}"; do
+            if [[ -v VM_NAMES[$vmid] && -f "/etc/pve/qemu-server/${vmid}.conf" ]]; then
+                all_vms+=("$vmid")
+            else
+                print_warning "VM ID '$vmid' is not valid or its config file is missing. It will be skipped."
+            fi
+        done
+    fi
 fi
 
 all_vms=($(for vmid in "${all_vms[@]}"; do echo "$vmid"; done | sort -n))
 
-if [[ ${#all_vms[@]} -eq 0 ]]; then
-    print_error "No valid VMs selected to process. Exiting."
-    exit 1
-fi
-
-echo
-print_info "The following valid VMs will be processed:"
-for vmid in "${all_vms[@]}"; do
-    vm_name=${VM_NAMES[$vmid]}
-    conf_file="/etc/pve/qemu-server/${vmid}.conf"
-    active_config=$(sed '/^\s*\[.*\]/,$d' "$conf_file")
-    machine=$(echo "$active_config" | grep '^machine:' | awk '{print $2}')
-    if [ -z "$machine" ]; then machine="i440fx (default)"; fi
-    cpu=$(echo "$active_config" | grep '^cpu:' | awk '{print $2}')
-    if [ -z "$cpu" ]; then cpu="x86-64-v2-AES (default)"; fi
-    vga=$(echo "$active_config" | grep '^vga:' | awk '{$1=""; print $0}' | xargs)
-    if [ -z "$vga" ]; then vga="default"; fi
-    echo -e "  - VM ${YELLOW}$vmid ($vm_name)${NC} | Machine: ${GREEN}$machine${NC}, CPU: ${GREEN}$cpu${NC}, VGA: ${GREEN}$vga${NC}"
-done
-echo
-
-
-# --- INTERACTIVE CONFIGURATION ---
-print_info "Interactive Setup:"
+# --- INTERACTIVE CONFIGURATION LOOP ---
 while true; do
+    clear
+    if [[ ${#all_vms[@]} -eq 0 ]]; then
+        print_error "No valid VMs selected to process. Exiting."
+        exit 1
+    fi
+
+    echo
+    print_info "The following valid VMs will be processed:"
+    for vmid in "${all_vms[@]}"; do
+        vm_name=${VM_NAMES[$vmid]}
+        conf_file="/etc/pve/qemu-server/${vmid}.conf"
+        active_config=$(sed '/^\s*\[.*\]/,$d' "$conf_file")
+        machine=$(echo "$active_config" | grep '^machine:' | awk '{print $2}')
+        if [ -z "$machine" ]; then machine="i440fx (default)"; fi
+        cpu=$(echo "$active_config" | grep '^cpu:' | awk '{print $2}')
+        if [ -z "$cpu" ]; then cpu="x86-64-v2-AES (default)"; fi
+        vga=$(echo "$active_config" | grep '^vga:' | awk '{$1=""; print $0}' | xargs)
+        if [ -z "$vga" ]; then vga="default"; fi
+        echo -e "  - VM ${YELLOW}$vmid ($vm_name)${NC} | Machine: ${GREEN}$machine${NC}, CPU: ${GREEN}$cpu${NC}, VGA: ${GREEN}$vga${NC}"
+    done
+    echo
+
+    print_info "Interactive Setup:"
     echo "Select operation mode for the selected VMs:"
     echo "  [1] Convert Machine: i440fx -> q35 (& replace snapshot)"
     echo "  [2] Convert Machine: q35 -> i440fx (& replace snapshot)"
@@ -329,6 +327,8 @@ while true; do
         4) OPERATION_MODE="cpu-v3-to-v2"; break;;
         5) 
             while true; do
+                clear
+                print_info "SPICE/VGA Memory Management"
                 echo "  Select SPICE/VGA Memory option:"
                 echo "    [1] Set custom SPICE Memory"
                 echo "    [2] Revert SPICE Memory to Default"
