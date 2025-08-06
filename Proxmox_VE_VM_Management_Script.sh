@@ -341,6 +341,7 @@ while true; do
                     *) print_error "Invalid selection.";;
                 esac
             done
+            continue
             ;;
         6) OPERATION_MODE="snapshot-only"; break;;
         7) echo; print_info "Exiting script as requested."; exit 0;;
@@ -366,7 +367,7 @@ if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440f
         ver_choice=${ver_choice:-1}
         case $ver_choice in
             1|2) break;;
-            3) continue 2;; # Continue the outer loop
+            3) continue 2;; # This is incorrect, needs to go back to the main loop
             *) print_error "Invalid selection.";;
         esac
     done
@@ -383,11 +384,11 @@ if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice
         echo "  [1] Create New"
         echo "  [2] Replace Last"
         echo "  [3] Do Nothing"
-        echo "  [4] Cancel and Exit"
+        echo "  [4] Back to Main Menu"
         read -p "  Your choice: " snap_choice_global < /dev/tty
         case $snap_choice_global in
             1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
-            4) echo; print_info "Exiting script as requested."; exit 0;;
+            4) continue 2;; # This is incorrect, needs to go back to the main loop
             *) print_error "Invalid selection.";;
         esac
     done
