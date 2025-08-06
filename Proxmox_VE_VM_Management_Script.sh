@@ -357,9 +357,18 @@ fi
 
 if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440fx" ]]; then
     while true; do
-        read -p "Use latest version (default) or specify a version? [1] Latest, [2] Specific: " ver_choice < /dev/tty
+        echo
+        print_info "Select machine version option:"
+        echo "  [1] Use latest version (default)"
+        echo "  [2] Specify a version manually"
+        echo "  [3] Back to Main Menu"
+        read -p "  Your choice: " ver_choice < /dev/tty
         ver_choice=${ver_choice:-1}
-        if [[ "$ver_choice" == "1" || "$ver_choice" == "2" ]]; then break; else print_error "Invalid selection."; fi
+        case $ver_choice in
+            1|2) break;;
+            3) continue 2;; # Continue the outer loop
+            *) print_error "Invalid selection.";;
+        esac
     done
     if [[ "$ver_choice" -eq 2 ]]; then
         read -p "Enter the full machine type string (e.g., pc-q35-8.1): " SPECIFIC_MACHINE_VERSION < /dev/tty
@@ -369,7 +378,13 @@ fi
 SNAPSHOT_ACTION_CHOICE=""
 if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
     while true; do
-        read -p "For all affected VMs, choose a snapshot action: [1] Create New, [2] Replace Last, [3] Do Nothing, [4] Cancel and Exit: " snap_choice_global < /dev/tty
+        echo
+        print_info "Snapshot Action for all affected VMs:"
+        echo "  [1] Create New"
+        echo "  [2] Replace Last"
+        echo "  [3] Do Nothing"
+        echo "  [4] Cancel and Exit"
+        read -p "  Your choice: " snap_choice_global < /dev/tty
         case $snap_choice_global in
             1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
             4) echo; print_info "Exiting script as requested."; exit 0;;
