@@ -3,7 +3,7 @@
 # Proxmox VE VM Management Script
 #
 # Author: speedrapide10
-# Version: 16.3 (Best Practices Refactor)
+# Version: 16.4 (Menu Logic Fix)
 # Tested on: Proxmox VE 9.0.3
 #
 # This script provides a robust, safe, and reliable method for automating
@@ -32,8 +32,8 @@ echo -e "${GREEN}"
 cat << "EOF"
 ╔════════════════════════════════════════════╗
 ║                                            ║
-║      Proxmox VE VM Management Script       ║
-║            by speedrapide10                ║
+║     Proxmox VE VM Management Script        ║
+║           by speedrapide10                 ║
 ║                                            ║
 ╚════════════════════════════════════════════╝
 EOF
@@ -287,13 +287,15 @@ fi
 all_vms=($(for vmid in "${all_vms[@]}"; do echo "$vmid"; done | sort -n))
 
 # --- INTERACTIVE CONFIGURATION LOOP ---
+# This single loop controls the entire configuration flow.
+# "Back to main menu" options will use 'continue' to restart this loop.
 while true; do
-    clear
     if [[ ${#all_vms[@]} -eq 0 ]]; then
         print_error "No valid VMs selected to process. Exiting."
         exit 1
     fi
 
+    clear
     echo
     print_info "The following valid VMs will be processed:"
     for vmid in "${all_vms[@]}"; do
@@ -310,6 +312,8 @@ while true; do
     done
     echo
 
+    # --- MAIN MENU ---
+    OPERATION_MODE=""
     print_info "Interactive Setup:"
     echo "Select operation mode for the selected VMs:"
     echo "  [1] Convert Machine: i440fx -> q35 (& replace snapshot)"
@@ -320,12 +324,13 @@ while true; do
     echo "  [6] Manage Snapshots"
     echo "  [7] Exit Script"
     read -p "Your choice: " op_choice < /dev/tty
+    
     case $op_choice in
-        1) OPERATION_MODE="i440fx-to-q35"; break;;
-        2) OPERATION_MODE="q35-to-i440fx"; break;;
-        3) OPERATION_MODE="cpu-v2-to-v3"; break;;
-        4) OPERATION_MODE="cpu-v3-to-v2"; break;;
-        5) 
+        1) OPERATION_MODE="i440fx-to-q35";;
+        2) OPERATION_MODE="q35-to-i440fx";;
+        3) OPERATION_MODE="cpu-v2-to-v3";;
+        4) OPERATION_MODE="cpu-v3-to-v2";;
+        5)
             while true; do
                 clear
                 print_info "SPICE/VGA Memory Management"
@@ -335,64 +340,71 @@ while true; do
                 echo "    [3] Back to Main Menu"
                 read -p "    Your choice: " spice_choice < /dev/tty
                 case $spice_choice in
-                    1) OPERATION_MODE="set-spice-mem"; break 2;;
-                    2) OPERATION_MODE="revert-spice-mem"; break 2;;
-                    3) break;;
+                    1) OPERATION_MODE="set-spice-mem"; break;;
+                    2) OPERATION_MODE="revert-spice-mem"; break;;
+                    3) continue 2;; # continue the outer while loop
                     *) print_error "Invalid selection.";;
                 esac
             done
-            continue
             ;;
-        6) OPERATION_MODE="snapshot-only"; break;;
+        6) OPERATION_MODE="snapshot-only";;
         7) echo; print_info "Exiting script as requested."; exit 0;;
-        *) print_error "Invalid selection. Please enter a number from 1 to 7.";;
+        *) print_error "Invalid selection. Please enter a number from 1 to 7."; sleep 2; continue;;
     esac
+
+    # --- SUB-MENUS AND CONFIGURATION ---
+
+    if [[ "$OPERATION_MODE" == "set-spice-mem" ]]; then
+        while true; do
+            read -p "Enter desired SPICE memory in MB (e.g., 32, 64, 128): " SPICE_MEM_VALUE < /dev/tty
+            if [[ "$SPICE_MEM_VALUE" =~ ^[0-9]+$ ]]; then break; else print_error "Invalid input. Please enter a number."; fi
+        done
+    fi
+
+    if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440fx" ]]; then
+        while true; do
+            clear
+            print_info "Select machine version option:"
+            echo "  [1] Use latest version (default)"
+            echo "  [2] Specify a version manually"
+            echo "  [3] Back to Main Menu"
+            read -p "  Your choice: " ver_choice < /dev/tty
+            ver_choice=${ver_choice:-1}
+            case $ver_choice in
+                1|2) break;;
+                3) continue 2;; # Correctly continues the main config loop
+                *) print_error "Invalid selection.";;
+            esac
+        done
+        if [[ "$ver_choice" -eq 2 ]]; then
+            read -p "Enter the full machine type string (e.g., pc-q35-8.1): " SPECIFIC_MACHINE_VERSION < /dev/tty
+        fi
+    fi
+
+    SNAPSHOT_ACTION_CHOICE=""
+    if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
+        while true; do
+            clear
+            print_info "Snapshot Action for all affected VMs:"
+            echo "  [1] Create New"
+            echo "  [2] Replace Last"
+            echo "  [3] Do Nothing"
+            echo "  [4] Back to Main Menu"
+            read -p "  Your choice: " snap_choice_global < /dev/tty
+            case $snap_choice_global in
+                1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
+                4) continue 2;; # Correctly continues the main config loop
+                *) print_error "Invalid selection.";;
+            esac
+        done
+    fi
+
+    # If we got here without 'continue', all configuration is done. Exit the loop.
+    break
 done
 
-if [[ "$OPERATION_MODE" == "set-spice-mem" ]]; then
-    while true; do
-        read -p "Enter desired SPICE memory in MB (e.g., 32, 64, 128): " SPICE_MEM_VALUE < /dev/tty
-        if [[ "$SPICE_MEM_VALUE" =~ ^[0-9]+$ ]]; then break; else print_error "Invalid input. Please enter a number."; fi
-    done
-fi
 
-if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440fx" ]]; then
-    while true; do
-        clear
-        print_info "Select machine version option:"
-        echo "  [1] Use latest version (default)"
-        echo "  [2] Specify a version manually"
-        echo "  [3] Back to Main Menu"
-        read -p "  Your choice: " ver_choice < /dev/tty
-        ver_choice=${ver_choice:-1}
-        case $ver_choice in
-            1|2) break;;
-            3) continue 2;;
-            *) print_error "Invalid selection.";;
-        esac
-    done
-    if [[ "$ver_choice" -eq 2 ]]; then
-        read -p "Enter the full machine type string (e.g., pc-q35-8.1): " SPECIFIC_MACHINE_VERSION < /dev/tty
-    fi
-fi
-
-SNAPSHOT_ACTION_CHOICE=""
-if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
-    while true; do
-        clear
-        print_info "Snapshot Action for all affected VMs:"
-        echo "  [1] Create New"
-        echo "  [2] Replace Last"
-        echo "  [3] Do Nothing"
-        echo "  [4] Back to Main Menu"
-        read -p "  Your choice: " snap_choice_global < /dev/tty
-        case $snap_choice_global in
-            1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
-            4) continue 2;;
-            *) print_error "Invalid selection.";;
-        esac
-    done
-fi
+# --- FINAL CONFIRMATIONS AND EXECUTION ---
 
 GLOBAL_CONFIRM=false
 if [[ ${#all_vms[@]} -gt 1 ]]; then
@@ -484,34 +496,53 @@ for vmid in "${all_vms[@]}"; do
         perform_action "$vmid" "$vm_name" "$conf_file"
     fi
 
-    if [[ "$snapshot_action_needed" == "true" && "$config_change_successful" == "true" ]]; then
-        print_info "Processing snapshots for VM $vmid ($vm_name)..."
-        snapshot_list=$(qm listsnapshot "$vmid" | grep -i -v 'You are here')
-        if [ -z "$snapshot_list" ]; then print_info "No actual snapshots found for VM $vmid ($vm_name)."; else
-            latest_snapshot_line=$(echo "$snapshot_list" | tail -n 1)
-            latest_snapshot_name=$(echo "$latest_snapshot_line" | awk '{print $2}')
-            latest_snapshot_desc=$(echo "$latest_snapshot_line" | awk '{for(i=5;i<=NF;i++) printf "%s ", $i}' | sed 's/ *$//')
-            if [ -z "$latest_snapshot_name" ]; then print_error "Failed to correctly parse the latest snapshot name for VM $vmid ($vm_name). Skipping."; else
-                print_info "Found most recent snapshot: Name: '$latest_snapshot_name', Description: '$latest_snapshot_desc'"
-                
-                snap_choice=""
-                if [[ "$DRY_RUN" == "true" ]]; then snap_choice=2; else snap_choice=$SNAPSHOT_ACTION_CHOICE; fi
+    # Snapshot logic requires a check if config change was successful AND it's a relevant operation
+    if [[ "$config_change_successful" == "true" && "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
+        snapshot_action_needed=true
+    fi
 
-                case $snap_choice in
-                    1) # Create New Snapshot
-                        new_snap_name="after_op_$(date +%Y%m%d_%H%M%S)"
-                        print_info "Creating new snapshot named '$new_snap_name'..."
-                        if ! error_output=$(qm snapshot "$vmid" "$new_snap_name" --description "New snapshot created by script" 2>&1); then
-                            err_msg="Failed to create new snapshot for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
-                        fi
-                        ;;
-                    2) # Replace Last Snapshot
+    if [[ "$snapshot_action_needed" == "true" ]]; then
+        print_info "Processing snapshots for VM $vmid ($vm_name)..."
+        # Determine which choice to use for snapshots
+        snap_choice=$SNAPSHOT_ACTION_CHOICE
+        if [[ "$DRY_RUN" == "true" ]]; then
+            # In dry-run, simulate the most common action without prompting
+             if [[ -z "$snap_choice" ]]; then snap_choice=2; fi
+        fi
+
+        case $snap_choice in
+            1) # Create New Snapshot
+                new_snap_name="after_op_$(date +%Y%m%d_%H%M%S)"
+                print_info "Creating new snapshot named '$new_snap_name'..."
+                if [[ "$DRY_RUN" == "true" ]]; then
+                    print_info "[DRY RUN] Would create new snapshot '$new_snap_name'."
+                elif ! error_output=$(qm snapshot "$vmid" "$new_snap_name" --description "New snapshot created by script" 2>&1); then
+                    err_msg="Failed to create new snapshot for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
+                fi
+                ;;
+            2) # Replace Last Snapshot
+                snapshot_list=$(qm listsnapshot "$vmid" | grep -i -v 'You are here')
+                if [ -z "$snapshot_list" ]; then
+                    print_info "No actual snapshots found for VM $vmid ($vm_name) to replace."
+                else
+                    latest_snapshot_line=$(echo "$snapshot_list" | tail -n 1)
+                    latest_snapshot_name=$(echo "$latest_snapshot_line" | awk '{print $2}')
+                    latest_snapshot_desc=$(echo "$latest_snapshot_line" | awk '{for(i=5;i<=NF;i++) printf "%s ", $i}' | sed 's/ *$//')
+
+                    if [ -z "$latest_snapshot_name" ]; then
+                         print_error "Failed to correctly parse the latest snapshot name for VM $vmid ($vm_name). Skipping."
+                    else
+                        print_info "Found most recent snapshot: Name: '$latest_snapshot_name', Description: '$latest_snapshot_desc'"
                         print_info "Deleting snapshot '$latest_snapshot_name'..."
-                        if ! error_output=$(qm delsnapshot "$vmid" "$latest_snapshot_name" 2>&1); then
+                        if [[ "$DRY_RUN" == "true" ]]; then
+                            print_info "[DRY RUN] Would delete snapshot '$latest_snapshot_name'."
+                        elif ! error_output=$(qm delsnapshot "$vmid" "$latest_snapshot_name" 2>&1); then
                             err_msg="Failed to delete snapshot '$latest_snapshot_name' for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
                         else
                             print_info "Recreating snapshot '$latest_snapshot_name'..."
-                            if [[ -n "$latest_snapshot_desc" && "$latest_snapshot_desc" != "no-description" ]]; then
+                            if [[ "$DRY_RUN" == "true" ]]; then
+                                print_info "[DRY RUN] Would recreate snapshot '$latest_snapshot_name'."
+                            elif [[ -n "$latest_snapshot_desc" && "$latest_snapshot_desc" != "no-description" ]]; then
                                 if ! error_output=$(qm snapshot "$vmid" "$latest_snapshot_name" --description "$latest_snapshot_desc" 2>&1); then
                                     err_msg="Failed to recreate snapshot for VM $vmid ($vm_name)."; print_error "$err_msg"; print_error_detail "QM Error: $error_output"; failures+=("$err_msg\n  Error: $error_output")
                                 fi
@@ -521,13 +552,13 @@ for vmid in "${all_vms[@]}"; do
                                 fi
                             fi
                         fi
-                        ;;
-                    3) # Do Nothing
-                        print_info "Skipping snapshot operation as requested."
-                        ;;
-                esac
-            fi
-        fi
+                    fi
+                fi
+                ;;
+            3) # Do Nothing
+                print_info "Skipping snapshot operation as requested."
+                ;;
+        esac
     fi
     
     if [[ "$was_running" == "true" ]]; then
