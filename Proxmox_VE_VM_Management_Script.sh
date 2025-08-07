@@ -367,7 +367,7 @@ if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440f
         ver_choice=${ver_choice:-1}
         case $ver_choice in
             1|2) break;;
-            3) continue 2;; # CORRECTED: This now correctly restarts the main loop
+            3) continue 2;;
             *) print_error "Invalid selection."; sleep 2;;
         esac
     done
@@ -388,7 +388,7 @@ if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice
         read -p "  Your choice: " snap_choice_global < /dev/tty
         case $snap_choice_global in
             1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
-            4) continue 2;; # CORRECTED: This now correctly restarts the main loop
+            4) continue 2;;
             *) print_error "Invalid selection."; sleep 2;;
         esac
     done
