@@ -331,9 +331,7 @@ while true; do
         3) OPERATION_MODE="cpu-v2-to-v3";;
         4) OPERATION_MODE="cpu-v3-to-v2";;
         5)
-            # Reset OPERATION_MODE before entering the submenu.
-            # If it's still empty after the loop, the user chose to go back.
-            OPERATION_MODE=""
+            # This submenu is now consistent with the others
             while true; do
                 clear
                 print_info "SPICE/VGA Memory Management"
@@ -345,14 +343,10 @@ while true; do
                 case $spice_choice in
                     1) OPERATION_MODE="set-spice-mem"; break;;
                     2) OPERATION_MODE="revert-spice-mem"; break;;
-                    3) break;; # Just break this inner loop
+                    3) continue 2;; # Continue the main config loop
                     *) print_error "Invalid selection."; sleep 2;;
                 esac
             done
-            # If no operation was selected, loop back to the main menu
-            if [[ -z "$OPERATION_MODE" ]]; then
-                continue
-            fi
             ;;
         6) OPERATION_MODE="snapshot-only";;
         7) echo; print_info "Exiting script as requested."; exit 0;;
