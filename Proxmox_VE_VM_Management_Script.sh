@@ -3,7 +3,7 @@
 # Proxmox VE VM Management Script
 #
 # Author: speedrapide10
-# Version: 16.4 (Menu Logic Fix)
+# Version: 16.5 (Robust Menu Navigation Fix)
 # Tested on: Proxmox VE 9.0.3
 #
 # This script provides a robust, safe, and reliable method for automating
@@ -331,6 +331,9 @@ while true; do
         3) OPERATION_MODE="cpu-v2-to-v3";;
         4) OPERATION_MODE="cpu-v3-to-v2";;
         5)
+            # Reset OPERATION_MODE before entering the submenu.
+            # If it's still empty after the loop, the user chose to go back.
+            OPERATION_MODE=""
             while true; do
                 clear
                 print_info "SPICE/VGA Memory Management"
@@ -342,10 +345,14 @@ while true; do
                 case $spice_choice in
                     1) OPERATION_MODE="set-spice-mem"; break;;
                     2) OPERATION_MODE="revert-spice-mem"; break;;
-                    3) continue 2;; # continue the outer while loop
-                    *) print_error "Invalid selection.";;
+                    3) break;; # Just break this inner loop
+                    *) print_error "Invalid selection."; sleep 2;;
                 esac
             done
+            # If no operation was selected, loop back to the main menu
+            if [[ -z "$OPERATION_MODE" ]]; then
+                continue
+            fi
             ;;
         6) OPERATION_MODE="snapshot-only";;
         7) echo; print_info "Exiting script as requested."; exit 0;;
@@ -372,8 +379,8 @@ while true; do
             ver_choice=${ver_choice:-1}
             case $ver_choice in
                 1|2) break;;
-                3) continue 2;; # Correctly continues the main config loop
-                *) print_error "Invalid selection.";;
+                3) continue 2;; # Continue the main config loop
+                *) print_error "Invalid selection."; sleep 2;;
             esac
         done
         if [[ "$ver_choice" -eq 2 ]]; then
@@ -393,8 +400,8 @@ while true; do
             read -p "  Your choice: " snap_choice_global < /dev/tty
             case $snap_choice_global in
                 1|2|3) SNAPSHOT_ACTION_CHOICE=$snap_choice_global; break;;
-                4) continue 2;; # Correctly continues the main config loop
-                *) print_error "Invalid selection.";;
+                4) continue 2;; # Continue the main config loop
+                *) print_error "Invalid selection."; sleep 2;;
             esac
         done
     fi
