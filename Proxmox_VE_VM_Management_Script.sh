@@ -3,14 +3,15 @@
 # Proxmox VE VM Management Script
 #
 # Author: speedrapide10
-# Version: 16.7 (Full Fixed Version with Robust Menu Navigation)
+# Version: 16.7 Adjusted for bulk confirmation & improved progress bar fix
 # Tested on: Proxmox VE 9.0.3
 #
-# This script provides a robust, safe, and reliable method for automating
-# common VM management tasks on a Proxmox VE host.
+# Modifications:
+# - Added one global per-operation confirmation (skip per-VM confirmation)
+# - Fixed progress bar display to improve readability and prevent visual issues
 # =============================================================================
-set -o pipefail
 
+set -o pipefail
 # --- Colors for Output ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -46,19 +47,31 @@ print_warning() { log_message "WARNING" "$1" "$YELLOW"; }
 print_error() { log_message "ERROR" "$1" "$RED"; }
 print_error_detail() { log_message "ERROR_DETAIL" "  - $1" "$RED"; }
 print_info() { log_message "INFO" "$1" "$GREEN"; }
+
+# --- Fixed Progress Bar with improved spacing ---
 print_overall_progress() {
     local current="$1" total="$2"
-    local term_width=${COLUMNS:-80}
-    local bar_width=$((term_width - 35))
-    (( bar_width < 10 )) && bar_width=10
-    local percentage=$((current * 100 / total))
+    local bar_width=50
+    local percentage=0
+    if (( total > 0 )); then
+        percentage=$((current * 100 / total))
+    fi
     local filled_length=$((bar_width * percentage / 100))
-    local bar
-    bar=$(printf "%*s" "$filled_length" | tr ' ' '#')
+    local empty_length=$((bar_width - filled_length))
+    local bar=""
+    if (( filled_length > 0 )); then
+        bar=$(printf "%0.s#" $(seq 1 $filled_length))
+    fi
+    if (( empty_length > 0 )); then
+        bar+=$(printf "%0.s-" $(seq 1 $empty_length))
+    fi
+
     if [[ "$current" -eq "$total" ]]; then
-        printf "\rOverall Progress: [${GREEN}%-${bar_width}s${NC}] %d%% (%d/%d)\033[K\n" "$bar" "$percentage" "$current" "$total"
+        # Print newline on completion for clean output
+        printf "\rOverall Progress: [${GREEN}%s${NC}] %3d%% (%d/%d)\n" "$bar" "$percentage" "$current" "$total"
     else
-        printf "\rOverall Progress: [${GREEN}%-${bar_width}s${NC}] %d%% (%d/%d)\033[K" "$bar" "$percentage" "$current" "$total"
+        # Overwrite line while processing with added trailing spaces to avoid leftover chars
+        printf "\rOverall Progress: [${GREEN}%s${NC}] %3d%% (%d/%d)    " "$bar" "$percentage" "$current" "$total"
     fi
 }
 
@@ -85,7 +98,7 @@ shutdown_vm() {
         if ! error_output=$(qm stop "$vmid" 2>&1); then
             local err_msg="Failed to force stop VM $vmid ($vm_name)."
             print_error "$err_msg"; print_error_detail "QM Error: $error_output"
-            failures+=("$err_msg\n  Error: $error_output")
+            failures+=("$err_msg"$'\n'"  Error: $error_output")
             return 1
         fi
     fi
@@ -100,7 +113,10 @@ select_vms_text() {
     echo "------------------------------------------------------------------" >&2
     local i=1
     VMS_INDEXED=()
-    for vmid in $(echo "${!VM_NAMES[@]}" | tr ' ' '\n' | sort -n); do
+    local sorted_vmids
+    IFS=$'\n' sorted_vmids=($(echo "${!VM_NAMES[@]}" | tr ' ' '\n' | sort -n))
+    unset IFS
+    for vmid in "${sorted_vmids[@]}"; do
         VMS_INDEXED+=("$vmid")
         local vm_name=${VM_NAMES[$vmid]}
         local conf_file="/etc/pve/qemu-server/${vmid}.conf"
@@ -123,7 +139,7 @@ select_vms_text() {
     echo "------------------------------------------------------------------" >&2; echo >&2
     print_info "Enter the numbers of the VMs you want to process, separated by spaces." >&2
     read -p "Or press [Enter] to process all VMs: " selected_numbers_str < /dev/tty
-    if [ -z "$selected_numbers_str" ]; then
+    if [[ -z "$selected_numbers_str" ]]; then
         echo "all"
     else
         local selected_vmids=""
@@ -143,9 +159,12 @@ select_vms_text() {
 is_action_needed() {
     local vmid="$1"
     local conf_file="/etc/pve/qemu-server/${vmid}.conf"
+    if [[ ! -f "$conf_file" ]]; then
+        echo "false"
+        return
+    fi
     local active_config
     active_config=$(sed '/^\s*\[.*\]/,$d' "$conf_file")
-
     case "$OPERATION_MODE" in
         snapshot-only|set-spice-mem|revert-spice-mem) echo "true"; return ;;
         i440fx-to-q35)
@@ -204,25 +223,27 @@ perform_action() {
             ;;
         i440fx-to-q35)
             local new_machine_type="q35"
-            if [[ "$ver_choice" -eq 2 ]]; then new_machine_type=$SPECIFIC_MACHINE_VERSION; fi
+            if [[ "$ver_choice" -eq 2 && -n "$SPECIFIC_MACHINE_VERSION" ]]; then
+                new_machine_type=$SPECIFIC_MACHINE_VERSION
+            fi
             print_info "Changing machine type of VM $vmid ($vm_name) to '$new_machine_type'..."
             if ! error_output=$(qm set "$vmid" --machine "$new_machine_type" 2>&1); then
                 local err_msg="Failed to change machine type for VM $vmid ($vm_name)."
                 print_error "$err_msg"
                 print_error_detail "QM Error: $error_output"
-                failures+=("$err_msg\n  Error: $error_output")
+                failures+=("$err_msg"$'\n'"  Error: $error_output")
                 config_change_successful=false
             fi
             ;;
         q35-to-i440fx)
-            if [[ "$ver_choice" -eq 2 ]]; then
+            if [[ "$ver_choice" -eq 2 && -n "$SPECIFIC_MACHINE_VERSION" ]]; then
                 local new_machine_type=$SPECIFIC_MACHINE_VERSION
                 print_info "Changing machine type of VM $vmid ($vm_name) to '$new_machine_type'..."
                 if ! error_output=$(qm set "$vmid" --machine "$new_machine_type" 2>&1); then
                     local err_msg="Failed to change machine type for VM $vmid ($vm_name)."
                     print_error "$err_msg"
                     print_error_detail "QM Error: $error_output"
-                    failures+=("$err_msg\n  Error: $error_output")
+                    failures+=("$err_msg"$'\n'"  Error: $error_output")
                     config_change_successful=false
                 fi
             else
@@ -242,7 +263,7 @@ perform_action() {
                 local err_msg="Failed to change CPU type for VM $vmid ($vm_name)."
                 print_error "$err_msg"
                 print_error_detail "QM Error: $error_output"
-                failures+=("$err_msg\n  Error: $error_output")
+                failures+=("$err_msg"$'\n'"  Error: $error_output")
                 config_change_successful=false
             fi
             ;;
@@ -253,7 +274,7 @@ perform_action() {
                 local err_msg="Failed to change CPU type for VM $vmid ($vm_name)."
                 print_error "$err_msg"
                 print_error_detail "QM Error: $error_output"
-                failures+=("$err_msg\n  Error: $error_output")
+                failures+=("$err_msg"$'\n'"  Error: $error_output")
                 config_change_successful=false
             fi
             ;;
@@ -267,14 +288,15 @@ snapshot_action_menu() {
         print_info "Snapshot Action for all affected VMs:"
         echo "  [1] Create New"
         echo "  [2] Replace Last"
-        echo "  [3] Back to Main Menu"
+        echo "  [3] Do Nothing"
+        echo "  [4] Back to Main Menu"
         read -p "  Your choice: " snap_choice_global < /dev/tty
         case $snap_choice_global in
-            1|2)
+            1|2|3)
                 SNAPSHOT_ACTION_CHOICE=$snap_choice_global
                 return 0
                 ;;
-            3)
+            4)
                 return 1  # signal back to main menu
                 ;;
             *)
@@ -360,14 +382,15 @@ main_menu() {
             2) OPERATION_MODE="q35-to-i440fx"; return 0 ;;
             3) OPERATION_MODE="cpu-v2-to-v3"; return 0 ;;
             4) OPERATION_MODE="cpu-v3-to-v2"; return 0 ;;
-            5) 
+            5)
                 spice_menu
-                [[ $? -eq 0 ]] && return 0 || continue
+                [[ $? -eq 0 ]] || continue
                 ;;
             6)
                 OPERATION_MODE="snapshot-only"
                 snapshot_action_menu
-                [[ $? -eq 0 ]] && return 0 || continue
+                [[ $? -eq 0 ]] || continue
+                return 0
                 ;;
             7) echo; print_info "Exiting script as requested."; exit 0 ;;
             *) print_error "Invalid selection. Please enter a number from 1 to 7."; sleep 2 ;;
@@ -375,23 +398,20 @@ main_menu() {
     done
 }
 
-# --- START ---
-
+# --- Sanity Checks and Initialization ---
 failures=()
-VM_NAMES=()
-VMS_INDEXED=()
+declare -A VM_NAMES
+declare -a VMS_INDEXED
 
 if [[ "$(id -u)" -ne 0 ]]; then
     print_error "This script must be run as root."
     exit 1
 fi
 
-# Populate VM list
 while read -r vmid vmname; do
     VM_NAMES[$vmid]=$vmname
 done < <(qm list | awk 'NR>1 {print $1, $2}')
 
-# VM selection
 raw_vms_input=()
 if [[ "$#" -gt 0 ]]; then
     raw_vms_input=("$@")
@@ -418,41 +438,218 @@ fi
 IFS=$'\n' all_vms=($(sort -n <<<"${all_vms[*]}"))
 unset IFS
 
-# Main interactive configuration loop
-main_menu
+while true; do
+    main_menu || continue
 
-# Machine version submenu for machine conversions
-if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440fx" ]]; then
-    machine_version_menu
-    if [[ $? -ne 0 ]]; then
-        # This part is tricky, ideally it should re-run the main menu
-        # For now, let's just exit to avoid complex state management
-        echo; print_info "Returning to main menu..."
-        exec "$0" "${all_vms[@]}"
+    if [[ "$OPERATION_MODE" == "i440fx-to-q35" || "$OPERATION_MODE" == "q35-to-i440fx" ]]; then
+        if ! machine_version_menu; then
+            continue
+        fi
+        if [[ "$ver_choice" -eq 2 ]]; then
+            read -p "Enter specific machine version string (e.g., pc-q35-7.2 or pc-i440fx-7.2): " SPECIFIC_MACHINE_VERSION < /dev/tty
+            SPECIFIC_MACHINE_VERSION=$(echo "$SPECIFIC_MACHINE_VERSION" | xargs)
+            if [[ -z "$SPECIFIC_MACHINE_VERSION" ]]; then
+                print_warning "No machine version provided. Using latest as default."
+                ver_choice=1
+            fi
+        fi
+    fi
+
+    if [[ "$OPERATION_MODE" == "set-spice-mem" ]]; then
+        while true; do
+            read -p "Enter desired SPICE memory in MB (e.g., 32, 64, 128): " SPICE_MEM_VALUE < /dev/tty
+            if [[ "$SPICE_MEM_VALUE" =~ ^[0-9]+$ ]]; then break; else print_error "Invalid input. Please enter a number."; fi
+        done
+    fi
+
+    if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" && "$OPERATION_MODE" != "snapshot-only" ]]; then
+        snapshot_action_menu || continue
+    fi
+
+    break
+done
+
+DRY_RUN=false
+ENABLE_LOGGING=false
+LOG_FILE_PATH="/tmp/Proxmox_VE_VM_Management_Script_$(date +%Y%m%d%H%M%S).log"
+ERROR_LOG_PATH="/tmp/Proxmox_VE_VM_Management_Script_errors_$(date +%Y%m%d%H%M%S).log"
+
+read -p "Enable Dry Run mode? (y/N): " dry_run_choice < /dev/tty
+dry_run_choice=${dry_run_choice:-n}
+if [[ "${dry_run_choice,,}" == "y" || "${dry_run_choice,,}" == "yes" ]]; then DRY_RUN=true; else DRY_RUN=false; fi
+
+read -p "Enable logging to a file? (Y/n): " log_choice < /dev/tty
+log_choice=${log_choice:-y}
+if [[ "${log_choice,,}" == "y" || "${log_choice,,}" == "yes" ]]; then ENABLE_LOGGING=true; else ENABLE_LOGGING=false; fi
+
+if [[ "$ENABLE_LOGGING" == "true" ]]; then
+    touch "$LOG_FILE_PATH"
+    touch "$ERROR_LOG_PATH"
+    print_info "Logging enabled. Log file: $LOG_FILE_PATH, Errors: $ERROR_LOG_PATH"
+fi
+
+confirm_all_vms=false
+if [[ "$DRY_RUN" == "false" ]]; then
+    read -p "Apply operation to ALL selected VMs without prompting for each? (Y/n): " all_confirm < /dev/tty
+    all_confirm=${all_confirm:-y}
+    if [[ "${all_confirm,,}" == "y" || "${all_confirm,,}" == "yes" ]]; then
+        confirm_all_vms=true
+    else
+        confirm_all_vms=false
     fi
 fi
 
-# SPICE memory input for setting mode
-if [[ "$OPERATION_MODE" == "set-spice-mem" ]]; then
-    while true; do
-        read -p "Enter desired SPICE memory in MB (e.g., 32, 64, 128): " SPICE_MEM_VALUE < /dev/tty
-        if [[ "$SPICE_MEM_VALUE" =~ ^[0-9]+$ ]]; then break; else print_error "Invalid input. Please enter a number."; fi
+echo
+print_warning "Starting VM processing..."
+sleep 3
+
+total_vms=${#all_vms[@]}
+processed_vms=0
+print_overall_progress 0 "$total_vms"
+
+for vmid in "${all_vms[@]}"; do
+    vm_name=${VM_NAMES[$vmid]}
+    conf_file="/etc/pve/qemu-server/${vmid}.conf"
+    echo; echo "-----------------------------------------------------------------"
+    print_info "Processing VM $vmid ($vm_name)..."
+    config_change_successful=true
+    snapshot_action_needed=false
+
+    if ! action_needed=$(is_action_needed "$vmid"); then
+        print_error "Could not determine if action is needed for VM $vmid."
+        ((processed_vms++))
+        print_overall_progress "$processed_vms" "$total_vms"
+        continue
+    fi
+
+    if [[ "$action_needed" == "false" ]]; then
+        print_info "Configuration already correct. Skipping VM $vmid."
+        ((processed_vms++))
+        print_overall_progress "$processed_vms" "$total_vms"
+        continue
+    fi
+
+    was_running=false
+    if [[ "$(qm status "$vmid" 2>/dev/null | awk '{print $2}')" == "running" ]]; then
+        was_running=true
+        if ! shutdown_vm "$vmid" "$vm_name"; then
+            print_error "Cannot proceed with VM $vmid due to shutdown failure."
+            ((processed_vms++))
+            print_overall_progress "$processed_vms" "$total_vms"
+            continue
+        fi
+    else
+        print_info "VM $vmid is already stopped."
+    fi
+
+    proceed_with_change=true
+    if [[ "$DRY_RUN" == "false" && "$confirm_all_vms" == "false" ]]; then
+        read -p "Proceed with operation for VM $vmid? (Y/n): " change_confirm < /dev/tty
+        change_confirm=${change_confirm:-y}
+        if ! [[ "${change_confirm,,}" == "y" ]]; then
+            proceed_with_change=false
+        fi
+    fi
+
+    if [[ "$proceed_with_change" == "false" ]]; then
+        print_info "Skipping change for VM $vmid as requested."
+        config_change_successful=false
+    else
+        if [[ "$OPERATION_MODE" != "snapshot-only" && "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
+            snapshot_action_needed=true
+        fi
+        perform_action "$vmid" "$vm_name" "$conf_file"
+    fi
+
+    if [[ "$snapshot_action_needed" == "true" && "$config_change_successful" == "true" ]]; then
+        print_info "Processing snapshots for VM $vmid ($vm_name)..."
+        snapshot_list=$(qm listsnapshot "$vmid" 2>/dev/null | grep -i -v 'You are here' || true)
+        if [ -z "$snapshot_list" ]; then
+            print_info "No snapshots found for VM $vmid."
+        else
+            latest_snapshot_line=$(echo "$snapshot_list" | tail -n 1)
+            latest_snapshot_name=$(echo "$latest_snapshot_line" | awk '{print $2}')
+            latest_snapshot_desc=$(echo "$latest_snapshot_line" | awk '{for(i=5;i<=NF;i++) printf "%s ", $i}' | sed 's/ *$//')
+            if [ -z "$latest_snapshot_name" ]; then
+                print_error "Failed to parse latest snapshot name for VM $vmid. Skipping."
+            else
+                print_info "Found latest snapshot: $latest_snapshot_name (Desc: $latest_snapshot_desc)"
+                snap_choice=""
+                if [[ "$DRY_RUN" == "true" ]]; then
+                    snap_choice=2
+                else
+                    snap_choice=$SNAPSHOT_ACTION_CHOICE
+                fi
+                case $snap_choice in
+                    1)
+                        new_snap_name="after_op_$(date +%Y%m%d_%H%M%S)"
+                        print_info "Creating new snapshot: $new_snap_name"
+                        if ! error_output=$(qm snapshot "$vmid" "$new_snap_name" --description "New snapshot created by script" 2>&1); then
+                            err_msg="Failed to create new snapshot for VM $vmid."
+                            print_error "$err_msg"
+                            print_error_detail "QM Error: $error_output"
+                            failures+=("$err_msg"$'\n'"  $error_output")
+                        fi
+                        ;;
+                    2)
+                        print_info "Replacing snapshot '$latest_snapshot_name'..."
+                        if ! error_output=$(qm delsnapshot "$vmid" "$latest_snapshot_name" 2>&1); then
+                            err_msg="Failed to delete snapshot '$latest_snapshot_name' for VM $vmid."
+                            print_error "$err_msg"
+                            print_error_detail "QM Error: $error_output"
+                            failures+=("$err_msg"$'\n'"  $error_output")
+                        else
+                            if [[ -n "$latest_snapshot_desc" && "$latest_snapshot_desc" != "no-description" ]]; then
+                                if ! error_output=$(qm snapshot "$vmid" "$latest_snapshot_name" --description "$latest_snapshot_desc" 2>&1); then
+                                    err_msg="Failed to recreate snapshot for VM $vmid."
+                                    print_error "$err_msg"
+                                    print_error_detail "QM Error: $error_output"
+                                    failures+=("$err_msg"$'\n'"  $error_output")
+                                fi
+                            else
+                                if ! error_output=$(qm snapshot "$vmid" "$latest_snapshot_name" 2>&1); then
+                                    err_msg="Failed to recreate snapshot for VM $vmid."
+                                    print_error "$err_msg"
+                                    print_error_detail "QM Error: $error_output"
+                                    failures+=("$err_msg"$'\n'"  $error_output")
+                                fi
+                            fi
+                        fi
+                        ;;
+                    3)
+                        print_info "Skipping snapshot operation for VM $vmid."
+                        ;;
+                esac
+            fi
+        fi
+    fi
+
+    if [[ "$was_running" == "true" ]]; then
+        print_info "Restarting VM $vmid ($vm_name)..."
+        if [[ "$DRY_RUN" == "true" ]]; then
+            print_info "[DRY RUN] Would start VM $vmid ($vm_name)."
+        else
+            if ! error_output=$(qm start "$vmid" 2>&1); then
+                err_msg="Failed to start VM $vmid."
+                print_error "$err_msg"
+                print_error_detail "QM Error: $error_output"
+                failures+=("$err_msg"$'\n'"  $error_output")
+            fi
+        fi
+    fi
+
+    ((processed_vms++))
+    print_overall_progress "$processed_vms" "$total_vms"
+done
+
+if [ ${#failures[@]} -gt 0 ]; then
+    echo; echo "-----------------------------------------------------------------"
+    print_error "SUMMARY OF FAILURES"
+    print_warning "The following operations failed and may require manual intervention:"
+    for error in "${failures[@]}"; do
+        log_message "FAILURE" "$error" "$RED"
     done
 fi
 
-# Snapshot action menu for applicable modes
-if [[ "$OPERATION_MODE" != "set-spice-mem" && "$OPERATION_MODE" != "revert-spice-mem" ]]; then
-    snapshot_action_menu
-    if [[ $? -ne 0 ]]; then
-        # Re-run the main menu
-        exec "$0" "${all_vms[@]}"
-    fi
-fi
-
-# Your existing setup for dry-run, logging, confirmation goes here as before...
-
-# Here continues the VM processing loop...
-
-# ...
-
-# End of script
+echo; echo "-----------------------------------------------------------------"
+print_info "All tasks completed."
